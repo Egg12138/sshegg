@@ -1,0 +1,33 @@
+{
+  "logo": {
+    "enabled": true,
+    "lines": [
+      "  ____  ____  _   _ ",
+      " / ___||  _ \\| | | |",
+      "| |    | |_) | |_| |",
+      "| |___ |  __/|  _  |",
+      " \\____||_|   |_| |_|"
+    ]
+  },
+  "layout": {
+    "show_logo": true,
+    "show_search": true,
+    "show_monitor": true,
+    "show_help": true,
+    "show_status": true,
+    "logo_height": 5,
+    "search_height": 3,
+    "monitor_height": 5,
+    "help_height": 2,
+    "status_height": 2
+  },
+  "theme": {
+    "logo": "Cyan",
+    "header": "Yellow",
+    "highlight": "Blue",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Magenta",
+    "text": "White"
+  }
+}

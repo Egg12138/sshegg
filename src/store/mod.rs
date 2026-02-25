@@ -7,6 +7,13 @@ use std::path::PathBuf;
 
 pub use path::resolve_store_path;
 
+pub trait SessionStore {
+    fn add(&self, session: Session) -> Result<()>;
+    fn list(&self) -> Result<Vec<Session>>;
+    fn remove(&self, name: &str) -> Result<()>;
+    fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()>;
+}
+
 pub struct JsonFileStore {
     path: PathBuf,
 }
@@ -44,6 +51,22 @@ impl JsonFileStore {
         self.save(&sessions)
     }
 
+    pub fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()> {
+        let mut sessions = self.load()?;
+        let mut found = false;
+        for session in &mut sessions {
+            if session.name == name {
+                session.last_connected_at = Some(timestamp);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(anyhow!("session '{}' not found", name));
+        }
+        self.save(&sessions)
+    }
+
     fn load(&self) -> Result<Vec<Session>> {
         if !self.path.exists() {
             return Ok(Vec::new());
@@ -72,6 +95,24 @@ impl JsonFileStore {
     }
 }
 
+impl SessionStore for JsonFileStore {
+    fn add(&self, session: Session) -> Result<()> {
+        JsonFileStore::add(self, session)
+    }
+
+    fn list(&self) -> Result<Vec<Session>> {
+        JsonFileStore::list(self)
+    }
+
+    fn remove(&self, name: &str) -> Result<()> {
+        JsonFileStore::remove(self, name)
+    }
+
+    fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()> {
+        JsonFileStore::touch_last_connected(self, name, timestamp)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::JsonFileStore;
@@ -85,6 +126,8 @@ mod tests {
             user: "me".to_string(),
             port: 22,
             identity_file: None,
+            tags: Vec::new(),
+            last_connected_at: None,
         }
     }
 
@@ -116,5 +159,111 @@ mod tests {
         let list = store.list().expect("list");
         assert_eq!(list[0].name, "alpha");
         assert_eq!(list[1].name, "zeta");
+    }
+
+    #[test]
+    fn touch_last_connected_updates_timestamp() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        store.add(sample_session("office")).expect("add");
+        store.touch_last_connected("office", 1234).expect("touch");
+
+        let list = store.list().expect("list");
+        assert_eq!(list[0].last_connected_at, Some(1234));
+    }
+
+    #[test]
+    fn load_returns_empty_for_nonexistent_file() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("nonexistent.json");
+        let store = JsonFileStore::new(store_path);
+
+        let list = store.list().expect("list");
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn load_returns_empty_for_empty_file() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("empty.json");
+        std::fs::write(&store_path, "").expect("write");
+        let store = JsonFileStore::new(store_path);
+
+        let list = store.list().expect("list");
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn load_returns_empty_for_whitespace_only_file() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("whitespace.json");
+        std::fs::write(&store_path, "   \n\t  ").expect("write");
+        let store = JsonFileStore::new(store_path);
+
+        let list = store.list().expect("list");
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn load_fails_for_invalid_json() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("invalid.json");
+        std::fs::write(&store_path, "not valid json {").expect("write");
+        let store = JsonFileStore::new(store_path);
+
+        let result = store.list();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unable to parse store") || err.contains("expected"));
+    }
+
+    #[test]
+    fn add_duplicate_name_fails() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        store.add(sample_session("office")).expect("add");
+        let result = store.add(sample_session("office"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("already exists"));
+    }
+
+    #[test]
+    fn remove_nonexistent_session_fails() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        let result = store.remove("nonexistent");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn touch_last_connected_nonexistent_fails() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        let result = store.touch_last_connected("nonexistent", 1234);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn save_creates_parent_directory() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("nested/dir/sessions.json");
+        let store = JsonFileStore::new(store_path.clone());
+
+        store.add(sample_session("office")).expect("add");
+        assert!(store_path.exists());
+        assert!(store_path.parent().unwrap().exists());
     }
 }
