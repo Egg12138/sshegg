@@ -91,3 +91,45 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+check_dependencies() {
+    print_header "Checking dependencies"
+
+    # Check for rust/cargo
+    if command -v cargo &> /dev/null; then
+        print_success "Rust toolchain found ($(cargo --version | cut -d' ' -f2))"
+    else
+        print_error "Rust toolchain not found"
+        echo ""
+        echo "${YELLOW}Install Rust via:${NC}"
+        echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        echo ""
+        exit 1
+    fi
+
+    # Check for ssh
+    if command -v ssh &> /dev/null; then
+        print_success "ssh command available"
+    else
+        print_warning "ssh command not found"
+        echo ""
+        echo "${YELLOW}Install OpenSSH client:${NC}"
+        if command -v apt-get &> /dev/null; then
+            echo "  sudo apt-get install openssh-client"
+        elif command -v yum &> /dev/null; then
+            echo "  sudo yum install openssh-clients"
+        elif command -v pacman &> /dev/null; then
+            echo "  sudo pacman -S openssh"
+        elif command -v brew &> /dev/null; then
+            echo "  brew install openssh"
+        else
+            echo "  Please install openssh-client for your distribution"
+        fi
+        echo ""
+        read -p "Continue anyway? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+}
