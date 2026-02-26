@@ -182,3 +182,35 @@ install_binary() {
         exit 1
     fi
 }
+
+setup_config() {
+    print_header "Setting up configuration"
+
+    CONFIG_DIR="${HOME}/.config/ssher"
+
+    # Create config directory
+    if [[ ! -d "$CONFIG_DIR" ]]; then
+        print_step "Creating config directory: ${CONFIG_DIR}"
+        mkdir -p "$CONFIG_DIR"
+        print_success "Config directory created"
+    else
+        print_step "Config directory exists: ${CONFIG_DIR}"
+    fi
+
+    # Copy sample configs if they don't exist
+    if [[ -f "assets/ui.sample.json" ]] && [[ ! -f "${CONFIG_DIR}/ui.json" ]]; then
+        print_step "Installing sample UI config..."
+        cp assets/ui.sample.json "${CONFIG_DIR}/ui.json"
+        print_success "UI config installed"
+    fi
+
+    if [[ -f "assets/cli.sample.json" ]] && [[ ! -f "${CONFIG_DIR}/cli.json" ]]; then
+        print_step "Installing sample CLI config..."
+        cp assets/cli.sample.json "${CONFIG_DIR}/cli.json"
+        print_success "CLI config installed"
+    fi
+
+    echo ""
+    echo "  ${BLUE}Config location:${NC} ${CONFIG_DIR}"
+    echo "  ${BLUE}Edit configs to customize ssher behavior${NC}"
+}
