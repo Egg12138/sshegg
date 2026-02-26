@@ -5,7 +5,9 @@ use crate::model::Session;
 use crate::store::{JsonFileStore, resolve_store_path};
 use crate::ui;
 use anyhow::{Context, Result, anyhow};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -29,6 +31,7 @@ enum Commands {
     Remove(RemoveArgs),
     Tui,
     Scp(ScpArgs),
+    Completions(CompletionsArgs),
 }
 
 #[derive(Args)]
@@ -78,20 +81,36 @@ enum ScpDirection {
     From,
 }
 
+#[derive(Args)]
+struct CompletionsArgs {
+    #[arg(value_enum)]
+    shell: Shell,
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let store_path = resolve_store_path(cli.store_path)?;
-    let store = JsonFileStore::new(store_path);
 
     match cli.command {
-        Some(Commands::Add(args)) => add_session(&store, args),
-        Some(Commands::List) => list_sessions(&store, cli.cli_config),
-        Some(Commands::Remove(args)) => remove_session(&store, &args.name),
-        Some(Commands::Tui) | None => {
-            let ui_config = ui::load_ui_config(cli.ui_config)?;
-            run_tui(&store, &ui_config)
+        Some(Commands::Completions(args)) => {
+            generate_completions(args.shell);
+            Ok(())
         }
-        Some(Commands::Scp(args)) => run_scp(&store, args),
+        _ => {
+            let store_path = resolve_store_path(cli.store_path)?;
+            let store = JsonFileStore::new(store_path);
+
+            match cli.command {
+                Some(Commands::Add(args)) => add_session(&store, args),
+                Some(Commands::List) => list_sessions(&store, cli.cli_config),
+                Some(Commands::Remove(args)) => remove_session(&store, &args.name),
+                Some(Commands::Tui) | None => {
+                    let ui_config = ui::load_ui_config(cli.ui_config)?;
+                    run_tui(&store, &ui_config)
+                }
+                Some(Commands::Scp(args)) => run_scp(&store, args),
+                Some(Commands::Completions(_)) => unreachable!(),
+            }
+        }
     }
 }
 
@@ -199,4 +218,9 @@ fn now_epoch_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn generate_completions(shell: Shell) {
+    let mut cmd = Cli::command();
+    generate(shell, &mut cmd, "ssher", &mut io::stdout());
 }
