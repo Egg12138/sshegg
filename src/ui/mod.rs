@@ -574,10 +574,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
                 status_line.push_str(" | ");
                 status_line.push_str(app.status());
             }
-            lines.push(Line::styled(
-                status_line,
-                Style::default().fg(theme.status),
-            ));
+            lines.push(Line::styled(status_line, Style::default().fg(theme.status)));
         }
         if config.layout.show_help {
             lines.push(Line::styled(
