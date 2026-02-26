@@ -5,7 +5,7 @@ mod state;
 use crate::model::Session;
 use crate::store::SessionStore;
 use crate::ui::state::{
-    AddField, AddSessionForm, AppState, InputMode, ScpDirection, ScpField, ScpForm,
+    AddField, AddSessionForm, AppState, InputMode, MonitorEntry, ScpDirection, ScpField, ScpForm,
 };
 use anyhow::Result;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent};
@@ -37,6 +37,20 @@ struct Theme {
 
 const PAGE_STEP: usize = 5;
 const FIELD_LABEL_WIDTH: usize = 10;
+const NAVIGATION_NOTES: &str = "↑/↓ or j/k | gg/G | / search | ? for help";
+const HELP_PANEL_LINES: &[&str] = &[
+    "?             Toggle this help panel",
+    "Enter         Connect to selected session",
+    "o / O         Add session form",
+    "dd            Delete selected session (confirm name)",
+    "/             Search (type to filter)",
+    "s             Open SCP form",
+    "m             Toggle monitor view",
+    "Ctrl-d / Ctrl-u  Page down/up",
+    "j / k / ↑ / ↓  Move selection",
+    "gg / G        Jump top or bottom",
+    "Esc           Close help or cancel",
+];
 
 impl Theme {
     fn from_config(config: &UiConfig) -> Self {
@@ -110,6 +124,7 @@ fn handle_key(
         InputMode::Search => handle_search_key(app, key),
         InputMode::ConfirmDelete => handle_confirm_delete_key(app, store, key),
         InputMode::AddSession => handle_add_session_key(app, store, key),
+        InputMode::Help => handle_help_key(app, key),
         InputMode::Scp => handle_scp_key(app, store, key),
     }
 }
@@ -173,6 +188,9 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
             app.set_mode(InputMode::Search);
             app.set_status("Search mode: type to filter, Enter/Esc to exit");
         }
+        KeyCode::Char('?') => {
+            app.set_mode(InputMode::Help);
+        }
         KeyCode::Char('n') => app.move_next(),
         KeyCode::Char('N') => app.move_prev(),
         KeyCode::Esc => {
@@ -209,6 +227,18 @@ fn handle_search_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
         {
             app.on_char(ch)
         }
+        _ => {}
+    }
+    Ok(None)
+}
+
+fn handle_help_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<Session>>> {
+    match key.code {
+        KeyCode::Char('?') | KeyCode::Esc => {
+            app.set_mode(InputMode::Normal);
+            app.set_pending(None);
+        }
+        KeyCode::Char('q') => return Ok(Some(None)),
         _ => {}
     }
     Ok(None)
@@ -355,9 +385,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     let mut constraints = Vec::new();
     let mut logo_index = None;
     let mut search_index = None;
-    let table_index;
-    let mut monitor_index = None;
-    let mut status_index = None;
+    let sessions_index;
+    let mut cheat_index = None;
 
     if config.layout.show_logo && config.logo.enabled {
         logo_index = Some(constraints.len());
@@ -367,15 +396,15 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         search_index = Some(constraints.len());
         constraints.push(Constraint::Length(config.layout.search_height));
     }
-    table_index = constraints.len();
+    sessions_index = constraints.len();
     constraints.push(Constraint::Min(3));
-    if app.monitor_enabled() {
-        monitor_index = Some(constraints.len());
-        constraints.push(Constraint::Length(config.layout.monitor_height));
-    }
-    if config.layout.show_status {
-        status_index = Some(constraints.len());
-        constraints.push(Constraint::Length(config.layout.status_height));
+    if config.layout.show_status || config.layout.show_help {
+        cheat_index = Some(constraints.len());
+        let mut bar_height = config.layout.help_height;
+        if config.layout.show_status {
+            bar_height = bar_height.saturating_add(config.layout.status_height);
+        }
+        constraints.push(Constraint::Length(bar_height));
     }
 
     let chunks = Layout::default()
@@ -407,6 +436,20 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
+
+    let sessions_area = chunks[sessions_index];
+    let (table_area, monitor_area) = if app.monitor_enabled() {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),
+                Constraint::Length(config.layout.monitor_height),
+            ])
+            .split(sessions_area);
+        (split[0], Some(split[1]))
+    } else {
+        (sessions_area, None)
+    };
 
     let header = Row::new(vec![
         Cell::from("Name"),
@@ -469,28 +512,30 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     if let Some(selected) = app.selected_index() {
         state.select(Some(selected));
     }
-    frame.render_stateful_widget(table, chunks[table_index], &mut state);
+    frame.render_stateful_widget(table, table_area, &mut state);
 
-    if let Some(index) = monitor_index {
+    if let Some(area) = monitor_area {
         let monitor_text = if let Some(session) = app.selected_session().cloned() {
             refresh_monitor(app, &session);
-            let pids = app.monitor_pids();
-            let pid_text = if pids.is_empty() {
-                "Active PIDs: -".to_string()
+            let entries = app.monitor_entries();
+            let connection_text = if entries.is_empty() {
+                "Connections: -".to_string()
             } else {
-                format!(
-                    "Active PIDs: {}",
-                    pids.iter()
-                        .map(|pid| pid.to_string())
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
+                let connections = entries
+                    .iter()
+                    .map(|entry| {
+                        let tty = entry.tty.as_deref().unwrap_or("?");
+                        format!("{}@{}", entry.pid, tty)
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("Connections: {}", connections)
             };
             let last_text = format!(
                 "Last connected: {}",
                 format_last_connected(session.last_connected_at)
             );
-            format!("Host: {}\n{}\n{}", session.host, pid_text, last_text)
+            format!("Host: {}\n{}\n{}", session.host, connection_text, last_text)
         } else {
             "No session selected.".to_string()
         };
@@ -501,29 +546,47 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
                 .border_style(Style::default().fg(theme.border))
                 .title("Monitor"),
         );
-        frame.render_widget(monitor, chunks[index]);
+        frame.render_widget(monitor, area);
     }
 
-    if let Some(index) = status_index {
-        let total = app.filtered_sessions().len();
-        let selected = app.selected_index().map(|idx| idx + 1).unwrap_or(0);
-        let info_line = if app.status().is_empty() {
-            format!(
-                "Mode: {:?} | {} sessions | {} selected",
-                app.mode(),
-                total,
-                selected
-            )
-        } else {
-            format!("{} | {} sessions", app.status(), total)
-        };
-
+    if let Some(index) = cheat_index {
         let mut lines = Vec::new();
-        lines.push(Line::styled(info_line, Style::default().fg(theme.status)));
-        if config.layout.show_help && config.layout.status_height > 1 {
-            let help_line = format!("Help: {}", mode_help_text(app.mode()));
-            lines.push(Line::styled(help_line, Style::default().fg(theme.help)));
+        if config.layout.show_status {
+            let total = app.filtered_sessions().len();
+            let selected_session = app.selected_session().cloned();
+            if let Some(session) = selected_session.as_ref() {
+                refresh_monitor(app, session);
+            }
+            let connections_text = match selected_session {
+                Some(session) => {
+                    let count = app.monitor_entries().len();
+                    if count > 0 {
+                        format!("{} connections on {}", count, session.name)
+                    } else {
+                        "not connected".to_string()
+                    }
+                }
+                None => "not connected".to_string(),
+            };
+            let mut status_line =
+                format!("Focus: Session | {} sessions | {}", total, connections_text);
+            if !app.status().is_empty() {
+                status_line.push_str(" | ");
+                status_line.push_str(app.status());
+            }
+            lines.push(Line::styled(
+                status_line,
+                Style::default().fg(theme.status),
+            ));
         }
+        if config.layout.show_help {
+            lines.push(Line::styled(
+                mode_help_text(app.mode()),
+                Style::default().fg(theme.help),
+            ));
+        }
+        let nav_line = format!("Navigation: {}", NAVIGATION_NOTES);
+        lines.push(Line::styled(nav_line, Style::default().fg(theme.help)));
 
         let info = Paragraph::new(Text::from(lines)).block(
             Block::default()
@@ -605,6 +668,21 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             }
         }
     }
+
+    if app.mode() == InputMode::Help {
+        let help_area = centered_rect(70, 60, size);
+        frame.render_widget(Clear, help_area);
+        let help_text = HELP_PANEL_LINES.join("\n");
+        let help_panel = Paragraph::new(help_text)
+            .style(Style::default().fg(theme.text))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title("Help"),
+            );
+        frame.render_widget(help_panel, help_area);
+    }
 }
 
 fn parse_color(name: &str) -> Color {
@@ -638,6 +716,7 @@ fn mode_help_text(mode: InputMode) -> &'static str {
         InputMode::ConfirmDelete => "Type name | Enter confirm | Esc cancel",
         InputMode::AddSession => "Up/Down move | Tab/Enter next | Shift-Tab prev | Esc cancel",
         InputMode::Scp => "Tab/Enter next | Space toggle | Esc cancel",
+        InputMode::Help => "? or Esc close | Ctrl-c exit",
     }
 }
 
@@ -941,13 +1020,13 @@ fn refresh_monitor(app: &mut AppState, session: &Session) {
     if !app.monitor_should_refresh(now, Duration::from_secs(1)) {
         return;
     }
-    let pids = fetch_ssh_pids(&session.host);
-    app.update_monitor(pids, now);
+    let entries = fetch_ssh_connections(&session.host);
+    app.update_monitor(entries, now);
 }
 
-fn fetch_ssh_pids(host: &str) -> Vec<u32> {
+fn fetch_ssh_connections(host: &str) -> Vec<MonitorEntry> {
     let output = std::process::Command::new("ps")
-        .args(["-eo", "pid=,command="])
+        .args(["-eo", "pid=,tty=,command="])
         .output();
 
     let Ok(output) = output else {
@@ -957,12 +1036,13 @@ fn fetch_ssh_pids(host: &str) -> Vec<u32> {
         return Vec::new();
     }
 
-    let mut pids = Vec::new();
+    let mut entries = Vec::new();
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        let mut parts = line.trim().splitn(2, ' ');
+        let mut parts = line.split_whitespace();
         let pid_str = parts.next().unwrap_or("");
-        let command = parts.next().unwrap_or("");
+        let tty_str = parts.next().unwrap_or("");
+        let command = parts.collect::<Vec<&str>>().join(" ");
         if command.is_empty() {
             continue;
         }
@@ -973,11 +1053,15 @@ fn fetch_ssh_pids(host: &str) -> Vec<u32> {
             continue;
         }
         if let Ok(pid) = pid_str.parse::<u32>() {
-            pids.push(pid);
+            let tty = match tty_str {
+                "" | "?" => None,
+                _ => Some(tty_str.to_string()),
+            };
+            entries.push(MonitorEntry { pid, tty });
         }
     }
 
-    pids
+    entries
 }
 
 fn format_last_connected(timestamp: Option<i64>) -> String {

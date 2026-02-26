@@ -8,7 +8,14 @@ pub enum InputMode {
     Search,
     ConfirmDelete,
     AddSession,
+    Help,
     Scp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorEntry {
+    pub pid: u32,
+    pub tty: Option<String>,
 }
 
 pub struct AppState {
@@ -25,7 +32,7 @@ pub struct AppState {
     scp_form: Option<ScpForm>,
     monitor_enabled: bool,
     monitor_last_update: Option<Instant>,
-    monitor_pids: Vec<u32>,
+    monitor_entries: Vec<MonitorEntry>,
 }
 
 impl AppState {
@@ -44,7 +51,7 @@ impl AppState {
             scp_form: None,
             monitor_enabled: false,
             monitor_last_update: None,
-            monitor_pids: Vec::new(),
+            monitor_entries: Vec::new(),
         };
         state.refresh_filter();
         state
@@ -243,13 +250,13 @@ impl AppState {
         }
     }
 
-    pub fn update_monitor(&mut self, pids: Vec<u32>, now: Instant) {
-        self.monitor_pids = pids;
+    pub fn update_monitor(&mut self, entries: Vec<MonitorEntry>, now: Instant) {
+        self.monitor_entries = entries;
         self.monitor_last_update = Some(now);
     }
 
-    pub fn monitor_pids(&self) -> &[u32] {
-        &self.monitor_pids
+    pub fn monitor_entries(&self) -> &[MonitorEntry] {
+        &self.monitor_entries
     }
 
     pub fn status(&self) -> &str {

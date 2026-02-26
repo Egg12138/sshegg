@@ -109,7 +109,7 @@ cargo run -- tui
 - `dd` starts delete confirmation; type the exact session name and hit `Enter`.
 - `s` launches the SCP helper for the selected session.
 - `m` toggles the monitor panel (active PIDs + last-connected).
-- The bottom region now stacks a status line (mode/session counts) above a dedicated operation cheat sheet; keep `layout.show_status` true and tweak `layout.status_height`/`layout.help_height` so the cheat sheet has enough room for the help and navigation hints.
+- The bottom operation bar now combines the status line with the cheat sheet; if the focus line feels cramped, bump `layout.status_height` and keep `layout.help_height` sized for the help and navigation hints.
 
 ### Configuration
 
@@ -130,8 +130,9 @@ Customize the TUI layout and theme with a JSON config file. Override the default
 Key options:
 
 - `layout.show_logo`, `layout.show_search`, `layout.show_monitor`: toggle panels.
-- `layout.status_height`: height of the status line above the cheat sheet (showing mode/session counts or custom status text).
-- `layout.help_height`: height of the cheat sheet that lists mode help plus navigation hints; if `layout.show_help` is false only the navigation line stays visible.
+- `layout.show_status`: include the status line inside the operation bar (focus + session count + connection count, plus any custom status text).
+- `layout.status_height`: number of lines reserved for the status line inside the operation bar.
+- `layout.help_height`: number of lines reserved for the cheat sheet (mode help + navigation); if `layout.show_help` is false only the navigation line stays visible.
 - `theme.*`: control logo, header, border, status/info, help, and text colors.
 
 CLI output colors can be customized via `~/.config/ssher/cli.json`, `--cli-config`, or `SSHER_CLI_CONFIG`.
