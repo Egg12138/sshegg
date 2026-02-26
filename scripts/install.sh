@@ -133,3 +133,52 @@ check_dependencies() {
         fi
     fi
 }
+
+build_binary() {
+    print_header "Building binary"
+    print_step "Building release binary..."
+
+    if cargo build --release 2>&1 | while IFS= read -r line; do
+        echo "    $line"
+    done; then
+        print_success "Build complete"
+    else
+        print_error "Build failed"
+        echo "Please check the error output above"
+        exit 1
+    fi
+}
+
+install_binary() {
+    print_header "Installing to ${PREFIX}"
+
+    # Create prefix directory if it doesn't exist
+    if [[ ! -d "$PREFIX" ]]; then
+        print_step "Creating directory: ${PREFIX}"
+        if mkdir -p "$PREFIX"; then
+            print_success "Directory created"
+        else
+            print_error "Failed to create directory: ${PREFIX}"
+            echo "Try using --prefix to specify a writable location"
+            exit 1
+        fi
+    fi
+
+    # Check if directory is writable
+    if [[ ! -w "$PREFIX" ]]; then
+        print_error "No write permission for: ${PREFIX}"
+        echo "Try using --prefix to specify a user-writable location"
+        echo "  Example: ./scripts/install.sh --prefix ~/.local/bin"
+        exit 1
+    fi
+
+    # Copy binary
+    print_step "Installing binary..."
+    BINARY_PATH="${PREFIX}/ssher"
+    if cp target/release/ssher "$BINARY_PATH" && chmod +x "$BINARY_PATH"; then
+        print_success "Binary installed to ${BINARY_PATH}"
+    else
+        print_error "Failed to install binary"
+        exit 1
+    fi
+}
