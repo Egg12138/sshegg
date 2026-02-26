@@ -214,3 +214,53 @@ setup_config() {
     echo "  ${BLUE}Config location:${NC} ${CONFIG_DIR}"
     echo "  ${BLUE}Edit configs to customize ssher behavior${NC}"
 }
+
+install_completions() {
+    if [[ "$INSTALL_COMPLETIONS" != "true" ]]; then
+        return
+    fi
+
+    print_header "Installing shell completions"
+
+    # Detect current shell
+    CURRENT_SHELL=$(basename "$SHELL")
+    INSTALLED_SOMETHING=false
+
+    # Bash completions
+    if [[ -d "${HOME}/.local/share/bash-completion/completions" ]] || command -v bash &> /dev/null; then
+        COMPLETION_DIR="${HOME}/.local/share/bash-completion/completions"
+        mkdir -p "$COMPLETION_DIR"
+        if [[ -f "scripts/completions/ssher.bash" ]]; then
+            cp scripts/completions/ssher.bash "${COMPLETION_DIR}/ssher"
+            print_success "bash completions installed"
+            INSTALLED_SOMETHING=true
+        fi
+    fi
+
+    # Zsh completions
+    if command -v zsh &> /dev/null || [[ "$CURRENT_SHELL" == "zsh" ]]; then
+        ZSH_FUNCTIONS="${ZDOTDIR:-${HOME}}/.zfunc"
+        mkdir -p "$ZSH_FUNCTIONS"
+        if [[ -f "scripts/completions/ssher.zsh" ]]; then
+            cp scripts/completions/ssher.zsh "${ZSH_FUNCTIONS}/_ssher"
+            print_success "zsh completions installed to ${ZSH_FUNCTIONS}/_ssher"
+            echo "    Add to ~/.zshrc: fpath=(\"${ZSH_FUNCTIONS}\" \$fpath)"
+            INSTALLED_SOMETHING=true
+        fi
+    fi
+
+    # Fish completions
+    if command -v fish &> /dev/null || [[ "$CURRENT_SHELL" == "fish" ]]; then
+        FISH_COMPLETIONS="${HOME}/.config/fish/completions"
+        mkdir -p "$FISH_COMPLETIONS"
+        if [[ -f "scripts/completions/ssher.fish" ]]; then
+            cp scripts/completions/ssher.fish "${FISH_COMPLETIONS}/"
+            print_success "fish completions installed"
+            INSTALLED_SOMETHING=true
+        fi
+    fi
+
+    if [[ "$INSTALLED_SOMETHING" != "true" ]]; then
+        print_warning "No recognized shell found for completions"
+    fi
+}
