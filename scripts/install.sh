@@ -264,3 +264,47 @@ install_completions() {
         print_warning "No recognized shell found for completions"
     fi
 }
+
+print_summary() {
+    echo ""
+    echo -e "${GREEN}==> Installation complete!${NC}"
+    echo ""
+    echo "  ${BLUE}Binary:${NC}        ${PREFIX}/ssher"
+    echo "  ${BLUE}Config:${NC}        ${HOME}/.config/ssher/"
+    echo ""
+    echo "  ${BLUE}Next steps:${NC}"
+    echo "    1. Make sure ${PREFIX} is in your PATH"
+    if [[ ":$PATH:" != *":${PREFIX}:"* ]]; then
+        echo "       ${YELLOW}Currently NOT in PATH${NC}"
+        echo "       Add to ~/.bashrc or ~/.zshrc:"
+        echo "         export PATH=\"${PREFIX}:\$PATH\""
+    fi
+    echo "    2. Run: ssher --help"
+    echo "    3. Launch TUI: ssher tui"
+    echo ""
+}
+
+# Main execution
+main() {
+    echo -e "${GREEN}==> Installing ssher${NC}"
+    echo ""
+
+    check_dependencies
+    echo ""
+
+    build_binary
+    echo ""
+
+    install_binary
+    echo ""
+
+    setup_config
+    echo ""
+
+    install_completions
+    echo ""
+
+    print_summary
+}
+
+main "$@"
