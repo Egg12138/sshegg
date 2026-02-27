@@ -162,7 +162,7 @@ download_binary() {
 
     # Create temp directory
     TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
+    CLEANUP_NEEDED=true
 
     # Download binary
     if [[ "$BINARY_NAME" == *"-windows-"* ]]; then
@@ -174,6 +174,7 @@ download_binary() {
             wget -q "$DOWNLOAD_URL.zip" -O "$ARCHIVE"
         else
             print_error "Neither curl nor wget available"
+            rm -rf "$TEMP_DIR"
             return 1
         fi
         unzip -q "$ARCHIVE" -d "$TEMP_DIR"
@@ -186,6 +187,7 @@ download_binary() {
             wget -q "$DOWNLOAD_URL.tar.gz" -O "$ARCHIVE"
         else
             print_error "Neither curl nor wget available"
+            rm -rf "$TEMP_DIR"
             return 1
         fi
         tar -xzf "$ARCHIVE" -C "$TEMP_DIR"
@@ -193,6 +195,7 @@ download_binary() {
 
     if [[ ! -f "${TEMP_DIR}/${BINARY_FILE}" ]]; then
         print_error "Downloaded binary not found"
+        rm -rf "$TEMP_DIR"
         return 1
     fi
 
@@ -200,6 +203,8 @@ download_binary() {
     mkdir -p target/release
     cp "${TEMP_DIR}/${BINARY_FILE}" target/release/ssher
     chmod +x target/release/ssher
+
+    rm -rf "$TEMP_DIR"
 
     print_success "Binary downloaded successfully"
     return 0
