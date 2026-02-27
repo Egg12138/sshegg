@@ -17,6 +17,8 @@ INFO="➜"
 PREFIX="${HOME}/.local/bin"
 INSTALL_COMPLETIONS=true
 FORCE_SOURCE=false
+REPO="Egg12138/sshegg"
+VERSION="${VERSION:-latest}"
 
 # Print functions
 print_header() {
@@ -52,6 +54,7 @@ ${BLUE}Options:${NC}
   --prefix PATH           Install to custom location (default: ~/.local/bin)
   --from-source           Force build from source
   --no-completions        Skip shell completion installation
+  --version VERSION       Install specific version (default: latest)
 
 ${BLUE}Examples:${NC}
   ./scripts/install.sh                    # Install to default location
@@ -80,6 +83,10 @@ while [[ $# -gt 0 ]]; do
             FORCE_SOURCE=true
             shift
             ;;
+        --version)
+            VERSION="$2"
+            shift 2
+            ;;
         --no-completions)
             INSTALL_COMPLETIONS=false
             shift
@@ -92,12 +99,123 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Detect platform and return appropriate binary name
+get_platform() {
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+
+    case "$arch" in
+        x86_64|amd64)
+            arch="x86_64"
+            ;;
+        aarch64|arm64)
+            arch="aarch64"
+            ;;
+        *)
+            echo "unsupported architecture: $arch" >&2
+            return 1
+            ;;
+    esac
+
+    case "$os" in
+        linux)
+            # Try musl first for static binary, fallback to gnu
+            if command -v ldd &> /dev/null; then
+                echo "ssher-${arch}-unknown-linux-musl"
+            else
+                echo "ssher-${arch}-unknown-linux-gnu"
+            fi
+            ;;
+        darwin)
+            echo "ssher-${arch}-apple-darwin"
+            ;;
+        msys*|mingw*|windows*)
+            echo "ssher-${arch}-pc-windows-msvc"
+            ;;
+        *)
+            echo "unsupported os: $os" >&2
+            return 1
+            ;;
+    esac
+}
+
+download_binary() {
+    print_header "Downloading pre-built binary"
+
+    # Determine platform
+    BINARY_NAME=$(get_platform) || {
+        print_error "Unsupported platform"
+        print_step "Falling back to building from source..."
+        return 1
+    }
+
+    print_step "Detected platform: ${BINARY_NAME}"
+
+    # Determine version
+    if [[ "$VERSION" == "latest" ]]; then
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+    else
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY_NAME}"
+    fi
+
+    print_step "Downloading from: ${DOWNLOAD_URL}"
+
+    # Create temp directory
+    TEMP_DIR=$(mktemp -d)
+    trap "rm -rf $TEMP_DIR" EXIT
+
+    # Download binary
+    if [[ "$BINARY_NAME" == *"-windows-"* ]]; then
+        BINARY_FILE="ssher.exe"
+        ARCHIVE="${TEMP_DIR}/ssher.zip"
+        if command -v curl &> /dev/null; then
+            curl -fsSL "$DOWNLOAD_URL.zip" -o "$ARCHIVE"
+        elif command -v wget &> /dev/null; then
+            wget -q "$DOWNLOAD_URL.zip" -O "$ARCHIVE"
+        else
+            print_error "Neither curl nor wget available"
+            return 1
+        fi
+        unzip -q "$ARCHIVE" -d "$TEMP_DIR"
+    else
+        BINARY_FILE="ssher"
+        ARCHIVE="${TEMP_DIR}/ssher.tar.gz"
+        if command -v curl &> /dev/null; then
+            curl -fsSL "$DOWNLOAD_URL.tar.gz" -o "$ARCHIVE"
+        elif command -v wget &> /dev/null; then
+            wget -q "$DOWNLOAD_URL.tar.gz" -O "$ARCHIVE"
+        else
+            print_error "Neither curl nor wget available"
+            return 1
+        fi
+        tar -xzf "$ARCHIVE" -C "$TEMP_DIR"
+    fi
+
+    if [[ ! -f "${TEMP_DIR}/${BINARY_FILE}" ]]; then
+        print_error "Downloaded binary not found"
+        return 1
+    fi
+
+    # Move to target/release for consistency with install_binary
+    mkdir -p target/release
+    cp "${TEMP_DIR}/${BINARY_FILE}" target/release/ssher
+    chmod +x target/release/ssher
+
+    print_success "Binary downloaded successfully"
+    return 0
+}
+
 check_dependencies() {
     print_header "Checking dependencies"
 
     # Check for rust/cargo
     if command -v cargo &> /dev/null; then
-        print_success "Rust toolchain found ($(cargo --version | cut -d' ' -f2))"
+        CARGO_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2)
+        if [[ -n "$CARGO_VERSION" ]]; then
+            print_success "Rust toolchain found ($CARGO_VERSION)"
+        else
+            print_success "Rust toolchain found (version unavailable)"
+        fi
     else
         print_error "Rust toolchain not found"
         echo ""
@@ -289,11 +407,25 @@ main() {
     echo -e "${GREEN}==> Installing ssher${NC}"
     echo ""
 
-    check_dependencies
-    echo ""
-
-    build_binary
-    echo ""
+    # Try to download pre-built binary first
+    if [[ "$FORCE_SOURCE" != "true" ]]; then
+        if download_binary; then
+            print_success "Using pre-built binary"
+            echo ""
+        else
+            print_warning "Download failed, building from source..."
+            echo ""
+            check_dependencies
+            echo ""
+            build_binary
+            echo ""
+        fi
+    else
+        check_dependencies
+        echo ""
+        build_binary
+        echo ""
+    fi
 
     install_binary
     echo ""

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Integration test for install.sh
-# This tests the install script in a temporary directory
+# This tests the install script by actually running it
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,9 +18,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Testing install.sh..."
+echo "  Test directory: $TEST_DIR"
+echo "  Test prefix: $TEST_PREFIX"
+echo "  Test home: $TEST_HOME"
+echo ""
 
 # Test 1: Help message
-echo "Testing: --help"
+echo "Test 1: --help"
 if bash "$PROJECT_ROOT/scripts/install.sh" --help > /dev/null 2>&1; then
     echo "  ✓ Help message works"
 else
@@ -29,7 +33,7 @@ else
 fi
 
 # Test 2: Argument validation - invalid option
-echo "Testing: Invalid option handling"
+echo "Test 2: Invalid option handling"
 if bash "$PROJECT_ROOT/scripts/install.sh" --invalid-option > /dev/null 2>&1; then
     echo "  ✗ Invalid option should fail"
     exit 1
@@ -37,62 +41,75 @@ else
     echo "  ✓ Invalid option rejected"
 fi
 
-# Test 3: Config directory creation (simulated)
-echo "Testing: Config directory structure"
-HOME="$TEST_HOME" mkdir -p "${TEST_HOME}/.config/ssher"
-if [[ -d "${TEST_HOME}/.config/ssher" ]]; then
-    echo "  ✓ Config directory structure valid"
+# Test 3: Build the binary
+echo "Test 3: Building binary"
+cd "$PROJECT_ROOT"
+if cargo build --release > /dev/null 2>&1; then
+    echo "  ✓ Binary built successfully"
 else
-    echo "  ✗ Config directory structure failed"
+    echo "  ✗ Binary build failed"
     exit 1
 fi
 
-# Test 4: Prefix directory creation
-echo "Testing: Prefix directory creation"
-mkdir -p "$TEST_PREFIX"
-if [[ -d "$TEST_PREFIX" ]]; then
-    echo "  ✓ Prefix directory can be created"
+# Test 4: Run installation with custom prefix and HOME
+echo "Test 4: Running installation with --prefix --from-source"
+export HOME="$TEST_HOME"
+if bash "$PROJECT_ROOT/scripts/install.sh" --prefix "$TEST_PREFIX" --from-source > /dev/null 2>&1; then
+    echo "  ✓ Installation script ran successfully"
 else
-    echo "  ✗ Prefix directory creation failed"
+    echo "  ✗ Installation script failed"
     exit 1
 fi
 
-# Test 5: Check for required files in project
-echo "Testing: Required project files"
-if [[ -f "$PROJECT_ROOT/scripts/install.sh" ]]; then
-    echo "  ✓ Install script exists"
+# Test 5: Check binary was installed
+echo "Test 5: Checking binary installation"
+if [[ -f "$TEST_PREFIX/ssher" ]]; then
+    echo "  ✓ Binary exists at $TEST_PREFIX/ssher"
 else
-    echo "  ✗ Install script missing"
+    echo "  ✗ Binary not found at $TEST_PREFIX/ssher"
     exit 1
 fi
 
-if [[ -f "$PROJECT_ROOT/assets/ui.sample.json" ]]; then
-    echo "  ✓ Sample UI config exists"
+if [[ -x "$TEST_PREFIX/ssher" ]]; then
+    echo "  ✓ Binary is executable"
 else
-    echo "  ✗ Sample UI config missing"
+    echo "  ✗ Binary is not executable"
     exit 1
 fi
 
-if [[ -f "$PROJECT_ROOT/assets/cli.sample.json" ]]; then
-    echo "  ✓ Sample CLI config exists"
+# Test 6: Check config directory was created
+echo "Test 6: Checking config directory creation"
+if [[ -d "$TEST_HOME/.config/ssher" ]]; then
+    echo "  ✓ Config directory created at $TEST_HOME/.config/ssher"
 else
-    echo "  ✗ Sample CLI config missing"
+    echo "  ✗ Config directory not found at $TEST_HOME/.config/ssher"
     exit 1
 fi
 
-# Test 6: Check script is executable
-if [[ -x "$PROJECT_ROOT/scripts/install.sh" ]]; then
-    echo "  ✓ Install script is executable"
+# Test 7: Check sample configs were installed
+echo "Test 7: Checking sample config installation"
+if [[ -f "$TEST_HOME/.config/ssher/ui.json" ]]; then
+    echo "  ✓ UI config installed"
 else
-    echo "  ⚠ Install script not executable (but can be run with bash)"
+    echo "  ✗ UI config not found"
+    exit 1
 fi
 
+if [[ -f "$TEST_HOME/.config/ssher/cli.json" ]]; then
+    echo "  ✓ CLI config installed"
+else
+    echo "  ✗ CLI config not found"
+    exit 1
+fi
+
+# Test 8: Run the installed binary
+echo "Test 8: Running installed binary"
+if "$TEST_PREFIX/ssher" --help > /dev/null 2>&1; then
+    echo "  ✓ Installed binary runs successfully"
+else
+    echo "  ✗ Installed binary failed to run"
+    exit 1
+fi
+
+echo ""
 echo "==> All tests passed!"
-echo ""
-echo "Note: Full installation test requires:"
-echo "  - Working Rust toolchain (cargo)"
-echo "  - Compiled binary at target/release/ssher"
-echo ""
-echo "To test full installation:"
-echo "  1. Build binary: cargo build --release"
-echo "  2. Run: $PROJECT_ROOT/scripts/install.sh --prefix /tmp/test-ssher"
