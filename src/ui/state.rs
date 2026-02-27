@@ -8,6 +8,7 @@ pub enum InputMode {
     Search,
     ConfirmDelete,
     AddSession,
+    EditSession,
     Help,
     Scp,
 }
@@ -195,9 +196,21 @@ impl AppState {
         self.refresh_filter();
     }
 
+    pub fn update_session(&mut self, original_name: &str, session: Session) {
+        if let Some(existing) = self.sessions.iter_mut().find(|s| s.name == original_name) {
+            *existing = session;
+            self.refresh_filter();
+        }
+    }
+
     pub fn start_add_session(&mut self, default_user: Option<String>) {
         self.add_form = Some(AddSessionForm::new(default_user));
         self.mode = InputMode::AddSession;
+    }
+
+    pub fn start_edit_session(&mut self, session: &Session) {
+        self.add_form = Some(AddSessionForm::from_session(session));
+        self.mode = InputMode::EditSession;
     }
 
     pub fn cancel_add_session(&mut self) {
@@ -340,6 +353,24 @@ impl AddSessionForm {
             port: "22".to_string(),
             identity_file: String::new(),
             tags: String::new(),
+            field: AddField::Name,
+            identity_exists: None,
+            identity_suggestions: Vec::new(),
+        }
+    }
+
+    fn from_session(session: &Session) -> Self {
+        Self {
+            name: session.name.clone(),
+            host: session.host.clone(),
+            user: session.user.clone(),
+            port: session.port.to_string(),
+            identity_file: session
+                .identity_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            tags: session.tags.join(","),
             field: AddField::Name,
             identity_exists: None,
             identity_suggestions: Vec::new(),

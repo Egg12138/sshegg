@@ -27,6 +27,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Add(AddArgs),
+    Update(UpdateArgs),
     List,
     Remove(RemoveArgs),
     Tui,
@@ -59,6 +60,27 @@ struct AddArgs {
 struct RemoveArgs {
     #[arg(long)]
     name: String,
+}
+
+#[derive(Args)]
+struct UpdateArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    host: Option<String>,
+    #[arg(long)]
+    user: Option<String>,
+    #[arg(long)]
+    port: Option<u16>,
+    #[arg(long, value_name = "PATH")]
+    identity_file: Option<PathBuf>,
+    #[arg(
+        long = "tag",
+        alias = "tags",
+        value_name = "TAG",
+        value_delimiter = ','
+    )]
+    tags: Vec<String>,
 }
 
 #[derive(Args)]
@@ -101,6 +123,7 @@ pub fn run() -> Result<()> {
 
             match cli.command {
                 Some(Commands::Add(args)) => add_session(&store, args),
+                Some(Commands::Update(args)) => update_session(&store, args),
                 Some(Commands::List) => list_sessions(&store, cli.cli_config),
                 Some(Commands::Remove(args)) => remove_session(&store, &args.name),
                 Some(Commands::Tui) | None => {
@@ -139,6 +162,34 @@ fn list_sessions(store: &JsonFileStore, cli_config: Option<PathBuf>) -> Result<(
 fn remove_session(store: &JsonFileStore, name: &str) -> Result<()> {
     store.remove(name)?;
     println!("Removed session: {}", name);
+    Ok(())
+}
+
+fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
+    let mut sessions = store.list()?;
+    let session = sessions
+        .iter_mut()
+        .find(|s| s.name == args.name)
+        .ok_or_else(|| anyhow!("session '{}' not found", args.name))?;
+
+    if let Some(host) = args.host {
+        session.host = host;
+    }
+    if let Some(user) = args.user {
+        session.user = user;
+    }
+    if let Some(port) = args.port {
+        session.port = port;
+    }
+    if args.identity_file.is_some() {
+        session.identity_file = args.identity_file;
+    }
+    if !args.tags.is_empty() {
+        session.tags = normalize_tags(args.tags);
+    }
+
+    store.update(session.clone())?;
+    println!("Updated session: {}", session.name);
     Ok(())
 }
 

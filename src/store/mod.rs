@@ -9,6 +9,7 @@ pub use path::resolve_store_path;
 
 pub trait SessionStore {
     fn add(&self, session: Session) -> Result<()>;
+    fn update(&self, session: Session) -> Result<()>;
     fn list(&self) -> Result<Vec<Session>>;
     fn remove(&self, name: &str) -> Result<()>;
     fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()>;
@@ -33,6 +34,16 @@ impl JsonFileStore {
         }
         sessions.push(session);
         self.save(&sessions)
+    }
+
+    pub fn update(&self, session: Session) -> Result<()> {
+        let mut sessions = self.load()?;
+        if let Some(existing) = sessions.iter_mut().find(|s| s.name == session.name) {
+            *existing = session;
+            self.save(&sessions)
+        } else {
+            Err(anyhow!("session '{}' not found", session.name))
+        }
     }
 
     pub fn list(&self) -> Result<Vec<Session>> {
@@ -98,6 +109,10 @@ impl JsonFileStore {
 impl SessionStore for JsonFileStore {
     fn add(&self, session: Session) -> Result<()> {
         JsonFileStore::add(self, session)
+    }
+
+    fn update(&self, session: Session) -> Result<()> {
+        JsonFileStore::update(self, session)
     }
 
     fn list(&self) -> Result<Vec<Session>> {
@@ -265,5 +280,57 @@ mod tests {
         store.add(sample_session("office")).expect("add");
         assert!(store_path.exists());
         assert!(store_path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn update_existing_session() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        store.add(sample_session("office")).expect("add");
+
+        let mut updated = sample_session("office");
+        updated.host = "newhost.example.com".to_string();
+        updated.port = 2222;
+        store.update(updated).expect("update");
+
+        let list = store.list().expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].host, "newhost.example.com");
+        assert_eq!(list[0].port, 2222);
+    }
+
+    #[test]
+    fn update_nonexistent_session_fails() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        let result = store.update(sample_session("nonexistent"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn update_preserves_other_sessions() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        store.add(sample_session("office")).expect("add");
+        store.add(sample_session("home")).expect("add");
+
+        let mut updated = sample_session("office");
+        updated.host = "newhost.example.com".to_string();
+        store.update(updated).expect("update");
+
+        let list = store.list().expect("list");
+        assert_eq!(list.len(), 2);
+        let office = list.iter().find(|s| s.name == "office").expect("office");
+        assert_eq!(office.host, "newhost.example.com");
+        let home = list.iter().find(|s| s.name == "home").expect("home");
+        assert_eq!(home.host, "example.com");
     }
 }

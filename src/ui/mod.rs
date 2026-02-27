@@ -42,6 +42,7 @@ const HELP_PANEL_LINES: &[&str] = &[
     "?             Toggle this help panel",
     "Enter         Connect to selected session",
     "o / O         Add session form",
+    "e             Edit selected session",
     "dd            Delete selected session (confirm name)",
     "/             Search (type to filter)",
     "s             Open SCP form",
@@ -124,6 +125,7 @@ fn handle_key(
         InputMode::Search => handle_search_key(app, key),
         InputMode::ConfirmDelete => handle_confirm_delete_key(app, store, key),
         InputMode::AddSession => handle_add_session_key(app, store, key),
+        InputMode::EditSession => handle_edit_session_key(app, store, key),
         InputMode::Help => handle_help_key(app, key),
         InputMode::Scp => handle_scp_key(app, store, key),
     }
@@ -159,6 +161,14 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
         KeyCode::Char('o') | KeyCode::Char('O') => {
             app.start_add_session(default_user());
             app.set_status("Add session: Enter/Tab/Up/Down move fields, Esc cancel");
+        }
+        KeyCode::Char('e') => {
+            if let Some(session) = app.selected_session().cloned() {
+                app.start_edit_session(&session);
+                app.set_status("Edit session: Enter/Tab/Up/Down move fields, Esc cancel");
+            } else {
+                app.set_status("No session selected to edit");
+            }
         }
         KeyCode::Char('s') => {
             if let Some(session) = app.selected_session().cloned() {
@@ -300,6 +310,53 @@ fn handle_add_session_key(
         KeyCode::Enter => {
             if form.field() == AddField::Tags {
                 submit_add_session(app, store)?;
+            } else {
+                form.next_field();
+            }
+        }
+        KeyCode::Backspace => {
+            form.active_value_mut().pop();
+            if form.field() == AddField::Identity {
+                update_identity_state(form);
+            }
+        }
+        KeyCode::Char(ch)
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
+        {
+            form.active_value_mut().push(ch);
+            if form.field() == AddField::Identity {
+                update_identity_state(form);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(None)
+}
+
+fn handle_edit_session_key(
+    app: &mut AppState,
+    store: &dyn SessionStore,
+    key: KeyEvent,
+) -> Result<Option<Option<Session>>> {
+    let Some(form) = app.add_form_mut() else {
+        app.cancel_add_session();
+        return Ok(None);
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel_add_session();
+            app.clear_status();
+        }
+        KeyCode::Tab => form.next_field(),
+        KeyCode::BackTab => form.prev_field(),
+        KeyCode::Up => form.prev_field(),
+        KeyCode::Down => form.next_field(),
+        KeyCode::Enter => {
+            if form.field() == AddField::Tags {
+                submit_edit_session(app, store)?;
             } else {
                 form.next_field();
             }
@@ -639,6 +696,29 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         }
     }
 
+    if app.mode() == InputMode::EditSession {
+        if let Some(form) = app.add_form() {
+            let modal_area = centered_rect(70, 50, size);
+            frame.render_widget(Clear, modal_area);
+            let lines = build_add_form_lines(form);
+            let modal = Paragraph::new(lines.join("\n")).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title("Edit Session"),
+            );
+            frame.render_widget(modal, modal_area);
+
+            let field_index = add_field_index(form.field()) as u16;
+            let cursor_x = modal_area.x
+                + 1
+                + (FIELD_LABEL_WIDTH + 4) as u16
+                + form.active_value().len() as u16;
+            let cursor_y = modal_area.y + 1 + field_index;
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
     if app.mode() == InputMode::Scp {
         if let Some(form) = app.scp_form() {
             let modal_area = centered_rect(70, 45, size);
@@ -707,11 +787,12 @@ fn parse_color(name: &str) -> Color {
 fn mode_help_text(mode: InputMode) -> &'static str {
     match mode {
         InputMode::Normal => {
-            "j/k move | gg top | G bottom | Ctrl-d/u page | / search | o/O add | s scp | m monitor | dd delete | Enter connect | q quit"
+            "j/k move | gg top | G bottom | Ctrl-d/u page | / search | o/O add | e edit | s scp | m monitor | dd delete | Enter connect | q quit"
         }
         InputMode::Search => "Type to filter | Enter/Esc to exit | j/k move",
         InputMode::ConfirmDelete => "Type name | Enter confirm | Esc cancel",
         InputMode::AddSession => "Up/Down move | Tab/Enter next | Shift-Tab prev | Esc cancel",
+        InputMode::EditSession => "Up/Down move | Tab/Enter next | Shift-Tab prev | Esc cancel",
         InputMode::Scp => "Tab/Enter next | Space toggle | Esc cancel",
         InputMode::Help => "? or Esc close | Ctrl-c exit",
     }
@@ -904,6 +985,64 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     app.add_session(session);
     app.cancel_add_session();
     app.set_status(format!("Added session: {}", name));
+    Ok(())
+}
+
+fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {
+    let Some(form) = app.add_form() else {
+        return Ok(());
+    };
+
+    let original_name = form.name.trim().to_string();
+    let name = original_name.clone();
+    let host = form.host.trim().to_string();
+    let user = form.user.trim().to_string();
+    let port_input = form.port.trim().to_string();
+    let identity_input = form.identity_file.trim().to_string();
+    let tags_input = form.tags.clone();
+
+    if name.is_empty() || host.is_empty() || user.is_empty() {
+        app.set_status("Name, host, and user are required");
+        return Ok(());
+    }
+
+    let port = if port_input.is_empty() {
+        22
+    } else {
+        match port_input.parse::<u16>() {
+            Ok(port) => port,
+            Err(_) => {
+                app.set_status("Port must be a valid number");
+                return Ok(());
+            }
+        }
+    };
+
+    let identity_file = if identity_input.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(identity_input))
+    };
+
+    let tags = split_tags(&tags_input);
+    let session = Session {
+        name: name.clone(),
+        host,
+        user,
+        port,
+        identity_file,
+        tags,
+        last_connected_at: None,
+    };
+
+    if let Err(err) = store.update(session.clone()) {
+        app.set_status(format!("Failed to update session: {}", err));
+        return Ok(());
+    }
+
+    app.update_session(&original_name, session);
+    app.cancel_add_session();
+    app.set_status(format!("Updated session: {}", name));
     Ok(())
 }
 

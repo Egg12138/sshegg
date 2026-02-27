@@ -287,3 +287,100 @@ fn add_with_identity_file() {
         .stdout(contains("office"))
         .stdout(contains("/home/me/.ssh/id_ed25519"));
 }
+
+#[test]
+fn update_existing_session() {
+    let (_dir, store_path) = store_path();
+
+    ssher_cmd(&store_path)
+        .args([
+            "add",
+            "--name",
+            "office",
+            "--host",
+            "office.example.com",
+            "--user",
+            "me",
+            "--port",
+            "22",
+        ])
+        .assert()
+        .success();
+
+    ssher_cmd(&store_path)
+        .args([
+            "update",
+            "--name",
+            "office",
+            "--host",
+            "newhost.example.com",
+            "--port",
+            "2222",
+        ])
+        .assert()
+        .success();
+
+    ssher_cmd(&store_path)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(contains("office"))
+        .stdout(contains("me@newhost.example.com"))
+        .stdout(contains("2222"));
+}
+
+#[test]
+fn update_nonexistent_session_fails() {
+    let (_dir, store_path) = store_path();
+
+    ssher_cmd(&store_path)
+        .args([
+            "update",
+            "--name",
+            "nonexistent",
+            "--host",
+            "newhost.example.com",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("not found"));
+}
+
+#[test]
+fn update_preserves_unset_fields() {
+    let (_dir, store_path) = store_path();
+
+    ssher_cmd(&store_path)
+        .args([
+            "add",
+            "--name",
+            "office",
+            "--host",
+            "office.example.com",
+            "--user",
+            "me",
+            "--port",
+            "2222",
+        ])
+        .assert()
+        .success();
+
+    // Update only the host, port should remain 2222
+    ssher_cmd(&store_path)
+        .args([
+            "update",
+            "--name",
+            "office",
+            "--host",
+            "newhost.example.com",
+        ])
+        .assert()
+        .success();
+
+    ssher_cmd(&store_path)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(contains("me@newhost.example.com"))
+        .stdout(contains("2222"));
+}
