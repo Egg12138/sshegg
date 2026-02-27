@@ -63,14 +63,14 @@ fi
 
 # Test 5: Check binary was installed
 echo "Test 5: Checking binary installation"
-if [[ -f "$TEST_PREFIX/ssher" ]]; then
-    echo "  ✓ Binary exists at $TEST_PREFIX/ssher"
+if [[ -f "$TEST_PREFIX/se" ]]; then
+    echo "  ✓ Binary exists at $TEST_PREFIX/se"
 else
-    echo "  ✗ Binary not found at $TEST_PREFIX/ssher"
+    echo "  ✗ Binary not found at $TEST_PREFIX/se"
     exit 1
 fi
 
-if [[ -x "$TEST_PREFIX/ssher" ]]; then
+if [[ -x "$TEST_PREFIX/se" ]]; then
     echo "  ✓ Binary is executable"
 else
     echo "  ✗ Binary is not executable"
@@ -104,7 +104,7 @@ fi
 
 # Test 8: Run the installed binary
 echo "Test 8: Running installed binary"
-if "$TEST_PREFIX/ssher" --help > /dev/null 2>&1; then
+if "$TEST_PREFIX/se" --help > /dev/null 2>&1; then
     echo "  ✓ Installed binary runs successfully"
 else
     echo "  ✗ Installed binary failed to run"

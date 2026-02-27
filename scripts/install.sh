@@ -17,8 +17,10 @@ INFO="➜"
 PREFIX="${HOME}/.local/bin"
 INSTALL_COMPLETIONS=true
 FORCE_SOURCE=false
+FORCE_INSTALL=false
 REPO="Egg12138/sshegg"
 VERSION="${VERSION:-latest}"
+BINARY_NAME_SHORT="se"
 
 # Print functions
 print_header() {
@@ -55,6 +57,7 @@ ${BLUE}Options:${NC}
   --from-source           Force build from source
   --no-completions        Skip shell completion installation
   --version VERSION       Install specific version (default: latest)
+  --force                 Force reinstall even if already up to date
 
 ${BLUE}Examples:${NC}
   ./scripts/install.sh                    # Install to default location
@@ -89,6 +92,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-completions)
             INSTALL_COMPLETIONS=false
+            shift
+            ;;
+        --force)
+            FORCE_INSTALL=true
             shift
             ;;
         *)
@@ -143,19 +150,69 @@ download_binary() {
     print_header "Downloading pre-built binary"
 
     # Determine platform
-    BINARY_NAME=$(get_platform) || {
+    LOCAL_BINARY_NAME=$(get_platform) || {
         print_error "Unsupported platform"
         print_step "Falling back to building from source..."
         return 1
     }
 
-    print_step "Detected platform: ${BINARY_NAME}"
+    print_step "Detected platform: ${LOCAL_BINARY_NAME}"
 
-    # Determine version
+    # Get latest version from GitHub API
+    LATEST_VERSION=""
     if [[ "$VERSION" == "latest" ]]; then
-        DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+        LATEST_VERSION=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        if [[ -z "$LATEST_VERSION" ]]; then
+            LATEST_VERSION="unknown"
+        fi
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${LOCAL_BINARY_NAME}"
     else
-        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY_NAME}"
+        LATEST_VERSION="$VERSION"
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${LOCAL_BINARY_NAME}"
+    fi
+
+    print_step "Latest version: ${LATEST_VERSION}"
+
+    # Check if se is already installed
+    if [[ -x "${PREFIX}/se" && "$FORCE_INSTALL" != "true" ]]; then
+        # Get version and commit hash from installed binary
+        INSTALLED_INFO=$("${PREFIX}/se" --version 2>/dev/null || echo "unknown")
+        INSTALLED_VERSION=$(echo "$INSTALLED_INFO" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+        INSTALLED_HASH=$(echo "$INSTALLED_INFO" | grep -oE '\([a-f0-9]{8}\)' | tr -d '()' || echo "unknown")
+
+        if [[ -z "$INSTALLED_VERSION" ]]; then
+            INSTALLED_VERSION="unknown"
+        fi
+        if [[ -z "$INSTALLED_HASH" ]]; then
+            INSTALLED_HASH="unknown"
+        fi
+
+        print_step "Installed: ${INSTALLED_VERSION} (${INSTALLED_HASH})"
+
+        # Compare versions (only if both are known and we're installing latest)
+        if [[ "$VERSION" == "latest" && "$INSTALLED_VERSION" != "unknown" && "$LATEST_VERSION" != "unknown" ]]; then
+            # Strip 'v' prefix if present
+            INSTALLED_CLEAN="${INSTALLED_VERSION#v}"
+            LATEST_CLEAN="${LATEST_VERSION#v}"
+
+            if [[ "$INSTALLED_CLEAN" == "$LATEST_CLEAN" && "$INSTALLED_HASH" != "unknown" ]]; then
+                # For pre-built binaries, we can't know the commit hash without downloading
+                # So if semantic versions match, we assume it's up to date
+                print_success "Already up to date (v${INSTALLED_CLEAN})"
+                echo ""
+                read -p "  Reinstall anyway? (y/N) " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    print_header "Installation skipped"
+                    return 2
+                fi
+                print_step "Forcing reinstall..."
+            elif [[ "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$LATEST_CLEAN" && "$INSTALLED_CLEAN" != "$LATEST_CLEAN" ]]; then
+                print_step "Newer version available: ${LATEST_CLEAN} (currently: ${INSTALLED_CLEAN})"
+            elif [[ "$INSTALLED_CLEAN" != "$LATEST_CLEAN" && "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$INSTALLED_CLEAN" ]]; then
+                print_warning "Installed version (${INSTALLED_CLEAN}) is newer than latest release (${LATEST_CLEAN})"
+            fi
+        fi
     fi
 
     print_step "Downloading from: ${DOWNLOAD_URL}"
@@ -165,9 +222,9 @@ download_binary() {
     CLEANUP_NEEDED=true
 
     # Download binary
-    if [[ "$BINARY_NAME" == *"-windows-"* ]]; then
-        BINARY_FILE="ssher.exe"
-        ARCHIVE="${TEMP_DIR}/ssher.zip"
+    if [[ "$LOCAL_BINARY_NAME" == *"-windows-"* ]]; then
+        BINARY_FILE="se.exe"
+        ARCHIVE="${TEMP_DIR}/se.zip"
         if command -v curl &> /dev/null; then
             curl -fsSL "$DOWNLOAD_URL.zip" -o "$ARCHIVE"
         elif command -v wget &> /dev/null; then
@@ -179,8 +236,8 @@ download_binary() {
         fi
         unzip -q "$ARCHIVE" -d "$TEMP_DIR"
     else
-        BINARY_FILE="ssher"
-        ARCHIVE="${TEMP_DIR}/ssher.tar.gz"
+        BINARY_FILE="se"
+        ARCHIVE="${TEMP_DIR}/se.tar.gz"
         if command -v curl &> /dev/null; then
             curl -fsSL "$DOWNLOAD_URL.tar.gz" -o "$ARCHIVE"
         elif command -v wget &> /dev/null; then
@@ -201,8 +258,8 @@ download_binary() {
 
     # Move to target/release for consistency with install_binary
     mkdir -p target/release
-    cp "${TEMP_DIR}/${BINARY_FILE}" target/release/ssher
-    chmod +x target/release/ssher
+    cp "${TEMP_DIR}/${BINARY_FILE}" target/release/se
+    chmod +x target/release/se
 
     rm -rf "$TEMP_DIR"
 
@@ -297,8 +354,8 @@ install_binary() {
 
     # Copy binary
     print_step "Installing binary..."
-    BINARY_PATH="${PREFIX}/ssher"
-    if cp target/release/ssher "$BINARY_PATH" && chmod +x "$BINARY_PATH"; then
+    BINARY_PATH="${PREFIX}/se"
+    if cp target/release/se "$BINARY_PATH" && chmod +x "$BINARY_PATH"; then
         print_success "Binary installed to ${BINARY_PATH}"
     else
         print_error "Failed to install binary"
@@ -392,7 +449,7 @@ print_summary() {
     echo ""
     echo -e "${GREEN}==> Installation complete!${NC}"
     echo ""
-    echo "  ${BLUE}Binary:${NC}        ${PREFIX}/ssher"
+    echo "  ${BLUE}Binary:${NC}        ${PREFIX}/se"
     echo "  ${BLUE}Config:${NC}        ${HOME}/.config/ssher/"
     echo ""
     echo "  ${BLUE}Next steps:${NC}"
@@ -402,8 +459,8 @@ print_summary() {
         echo "       Add to ~/.bashrc or ~/.zshrc:"
         echo "         export PATH=\"${PREFIX}:\$PATH\""
     fi
-    echo "    2. Run: ssher --help"
-    echo "    3. Launch TUI: ssher tui"
+    echo "    2. Run: se --help"
+    echo "    3. Launch TUI: se tui"
     echo ""
 }
 
@@ -414,15 +471,26 @@ main() {
 
     # Try to download pre-built binary first
     if [[ "$FORCE_SOURCE" != "true" ]]; then
+        set +e  # Temporarily disable errexit to handle return codes
         if download_binary; then
-            print_success "Using pre-built binary"
-            echo ""
+            DOWNLOAD_STATUS=0
         else
+            DOWNLOAD_STATUS=$?
+        fi
+        set -e  # Re-enable errexit
+
+        if [[ $DOWNLOAD_STATUS -eq 2 ]]; then
+            # Already up to date, user chose not to reinstall
+            exit 0
+        elif [[ $DOWNLOAD_STATUS -ne 0 ]]; then
             print_warning "Download failed, building from source..."
             echo ""
             check_dependencies
             echo ""
             build_binary
+            echo ""
+        else
+            print_success "Using pre-built binary"
             echo ""
         fi
     else

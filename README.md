@@ -1,4 +1,4 @@
-# ssher
+# se
 
 CLI + TUI for managing SSH sessions.
 
@@ -6,7 +6,7 @@ CLI + TUI for managing SSH sessions.
 
 ### Overview
 
-`ssher` keeps your SSH sessions organized with a command-line tool for automation and an optional TUI for an interactive vim-inspired workflow. Use the CLI for scripts and the TUI for browsing, monitoring, and SCP helpers. Running `cargo run --` with no arguments also launches the TUI.
+`se` keeps your SSH sessions organized with a command-line tool for automation and an optional TUI for an interactive vim-inspired workflow. Use the CLI for scripts and the TUI for browsing, monitoring, and SCP helpers. Running `cargo run --` with no arguments also launches the TUI.
 
 ## Installation
 
@@ -32,6 +32,12 @@ The install script will:
 ./scripts/install.sh --help          # Show all options
 ./scripts/install.sh --prefix ~/bin  # Custom install location
 ./scripts/install.sh --no-completions  # Skip shell completions
+./scripts/install.sh --force         # Force reinstall even if up to date
+```
+
+**Alias (optional):**
+```sh
+# The binary is named 'se' (short for ssher), similar to how ripgrep uses 'rg'
 ```
 
 ### With Cargo
@@ -46,19 +52,19 @@ Once installed you can still use `cargo run -- <command>` while iterating.
 
 ## Uninstallation
 
-To remove ssher from your system:
+To remove se from your system:
 
 ```sh
 # Remove the binary
-rm ~/.local/bin/ssher
+rm ~/.local/bin/se
 
 # Remove configuration and data (optional, keeps your sessions)
 rm -rf ~/.config/ssher/
 
 # Remove shell completions
-rm ~/.local/share/bash-completion/completions/ssher 2>/dev/null
-rm ~/.zfunc/_ssher 2>/dev/null
-rm ~/.config/fish/completions/ssher.fish 2>/dev/null
+rm ~/.local/share/bash-completion/completions/se 2>/dev/null
+rm ~/.zfunc/_se 2>/dev/null
+rm ~/.config/fish/completions/se.fish 2>/dev/null
 ```
 
 If you used a custom `--prefix` during installation, adjust the binary path accordingly.
@@ -81,6 +87,23 @@ List sessions:
 
 ```sh
 cargo run -- list
+```
+
+Export sessions:
+
+```sh
+se export --format json           # Export to stdout
+se export --format csv            # Export as CSV
+se export --format ssh-config     # Export as SSH config
+se export --format json --output sessions.json  # Export to file
+```
+
+Import sessions:
+
+```sh
+se import --input sessions.json              # Import from JSON (interactive conflict resolution)
+se import --input sessions.json --force      # Force import, override conflicts
+se import --format ssh-config --input ~/.ssh/config  # Import from SSH config
 ```
 
 Remove a session:
