@@ -1,0 +1,151 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build release for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: ssher
+            asset_name: ssher-x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact_name: ssher
+            asset_name: ssher-x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: ssher
+            asset_name: ssher-aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact_name: ssher
+            asset_name: ssher-aarch64-unknown-linux-musl
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact_name: ssher
+            asset_name: ssher-x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_name: ssher
+            asset_name: ssher-aarch64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: ssher.exe
+            asset_name: ssher-x86_64-pc-windows-msvc
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: ssher.exe
+            asset_name: ssher-aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: ${{ contains(matrix.target, 'musl') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+        shell: bash
+
+      - name: Setup cross-compilation for aarch64-linux
+        if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: ${{ runner.os != 'Windows' }}
+        run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+  create-release:
+    name: Create GitHub release
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+        shell: bash
+
+      - name: Create release archives
+        run: |
+          cd artifacts
+          for dir in */; do
+            dir_name=${dir%/}
+            bin_name=$(basename "$dir_name")
+            if [[ "$bin_name" == *"windows"* ]]; then
+              zip "${bin_name}.zip" "$dir_name"/*
+            else
+              tar czf "${bin_name}.tar.gz" -C "$dir_name" .
+            fi
+          done
+        shell: bash
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          cat << EOF > release_notes.md
+          ## Release $VERSION
+
+          ### Installation
+
+          \`\`\`bash
+          # Download and install (example for Linux x86_64)
+          curl -LO https://github.com/${{ github.repository }}/releases/download/v${VERSION}/ssher-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf ssher-x86_64-unknown-linux-gnu.tar.gz
+          chmod +x ssher
+          ./ssher --help
+          \`\`\`
+
+          ### Checksums
+          \`\`\`
+          $(sha256sum artifacts/*.{tar.gz,zip} 2>/dev/null | sed 's|artifacts/||' || true)
+          \`\`\`
+          EOF
+        shell: bash
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: artifacts/*.{tar.gz,zip}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
