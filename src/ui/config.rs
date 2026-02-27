@@ -71,7 +71,7 @@ impl Default for LayoutConfig {
             search_height: 3,
             monitor_height: 5,
             help_height: 2,
-            status_height: 2,
+            status_height: 1,
         }
     }
 }
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(config.search_height, 3);
         assert_eq!(config.monitor_height, 5);
         assert_eq!(config.help_height, 2);
-        assert_eq!(config.status_height, 2);
+        assert_eq!(config.status_height, 1);
     }
 
     #[test]
