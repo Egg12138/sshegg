@@ -415,12 +415,12 @@ ssher/
 | Phase | Planned Tests | Completed | Passing | Failing |
 |-------|--------------|-----------|---------|---------|
 | Phase 1: Core Infrastructure | 7 | 7 | 5 | 2 |
-| Phase 2: CLI Integration | ~15-20 | 0 | - | - |
+| Phase 2: CLI Integration | ~15-20 | 33 | 33 | 0 |
 | Phase 3: TUI Integration | ~10-15 | 0 | - | - |
 | Phase 4: Testing & Docs | ~10-15 | 0 | - | - |
-| **Total** | **~42-57** | **7** | **5** | **2** |
+| **Total** | **~42-57** | **40** | **38** | **2** |
 
-**Progress**: 16% (7/42+ tests)
+**Progress**: 71% (40/42+ tests)
 
 ---
 
@@ -571,5 +571,5 @@ keyring = "2.3"                # NEW
 ---
 
 **Last Updated**: 2025-02-28
-**Status**: Phase 1 Complete, Phase 2 In Progress
-**Test Coverage**: 16% (7/42+ tests planned)
+**Status**: Phase 2 Complete, Phase 3 Pending
+**Test Coverage**: 71% (40/42+ tests planned, 33 passing in Phase 2)
