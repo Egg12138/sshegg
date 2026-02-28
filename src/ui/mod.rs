@@ -101,12 +101,11 @@ fn run_app<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|frame| draw_ui(frame, app, config, theme))?;
 
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if let Some(selection) = handle_key(app, store, key)? {
-                    return Ok(selection);
-                }
-            }
+        if event::poll(Duration::from_millis(200))?
+            && let Event::Key(key) = event::read()?
+            && let Some(selection) = handle_key(app, store, key)?
+        {
+            return Ok(selection);
         }
     }
 }
@@ -442,7 +441,6 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     let mut constraints = Vec::new();
     let mut logo_index = None;
     let mut search_index = None;
-    let sessions_index;
     let mut cheat_index = None;
 
     if config.layout.show_logo && config.logo.enabled {
@@ -453,7 +451,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         search_index = Some(constraints.len());
         constraints.push(Constraint::Length(config.layout.search_height));
     }
-    sessions_index = constraints.len();
+    let sessions_index = constraints.len();
     constraints.push(Constraint::Min(3));
     if config.layout.show_status || config.layout.show_help {
         cheat_index = Some(constraints.len());
@@ -673,76 +671,72 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 
-    if app.mode() == InputMode::AddSession {
-        if let Some(form) = app.add_form() {
-            let modal_area = centered_rect(70, 50, size);
-            frame.render_widget(Clear, modal_area);
-            let lines = build_add_form_lines(form);
-            let modal = Paragraph::new(lines.join("\n")).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("Add Session"),
-            );
-            frame.render_widget(modal, modal_area);
+    if app.mode() == InputMode::AddSession
+        && let Some(form) = app.add_form()
+    {
+        let modal_area = centered_rect(70, 50, size);
+        frame.render_widget(Clear, modal_area);
+        let lines = build_add_form_lines(form);
+        let modal = Paragraph::new(lines.join("\n")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .title("Add Session"),
+        );
+        frame.render_widget(modal, modal_area);
 
-            let field_index = add_field_index(form.field()) as u16;
-            let cursor_x = modal_area.x
-                + 1
-                + (FIELD_LABEL_WIDTH + 4) as u16
-                + form.active_value().len() as u16;
-            let cursor_y = modal_area.y + 1 + field_index;
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
+        let field_index = add_field_index(form.field()) as u16;
+        let cursor_x =
+            modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + form.active_value().len() as u16;
+        let cursor_y = modal_area.y + 1 + field_index;
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
-    if app.mode() == InputMode::EditSession {
-        if let Some(form) = app.add_form() {
-            let modal_area = centered_rect(70, 50, size);
-            frame.render_widget(Clear, modal_area);
-            let lines = build_add_form_lines(form);
-            let modal = Paragraph::new(lines.join("\n")).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("Edit Session"),
-            );
-            frame.render_widget(modal, modal_area);
+    if app.mode() == InputMode::EditSession
+        && let Some(form) = app.add_form()
+    {
+        let modal_area = centered_rect(70, 50, size);
+        frame.render_widget(Clear, modal_area);
+        let lines = build_add_form_lines(form);
+        let modal = Paragraph::new(lines.join("\n")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .title("Edit Session"),
+        );
+        frame.render_widget(modal, modal_area);
 
-            let field_index = add_field_index(form.field()) as u16;
-            let cursor_x = modal_area.x
-                + 1
-                + (FIELD_LABEL_WIDTH + 4) as u16
-                + form.active_value().len() as u16;
-            let cursor_y = modal_area.y + 1 + field_index;
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
+        let field_index = add_field_index(form.field()) as u16;
+        let cursor_x =
+            modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + form.active_value().len() as u16;
+        let cursor_y = modal_area.y + 1 + field_index;
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
-    if app.mode() == InputMode::Scp {
-        if let Some(form) = app.scp_form() {
-            let modal_area = centered_rect(70, 45, size);
-            frame.render_widget(Clear, modal_area);
-            let lines = build_scp_form_lines(form);
-            let modal = Paragraph::new(lines.join("\n")).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("SCP"),
-            );
-            frame.render_widget(modal, modal_area);
+    if app.mode() == InputMode::Scp
+        && let Some(form) = app.scp_form()
+    {
+        let modal_area = centered_rect(70, 45, size);
+        frame.render_widget(Clear, modal_area);
+        let lines = build_scp_form_lines(form);
+        let modal = Paragraph::new(lines.join("\n")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .title("SCP"),
+        );
+        frame.render_widget(modal, modal_area);
 
-            if matches!(form.field(), ScpField::Local | ScpField::Remote) {
-                let field_index = scp_field_index(form.field()) as u16;
-                let value_len = match form.field() {
-                    ScpField::Local => form.local_path.len(),
-                    ScpField::Remote => form.remote_path.len(),
-                    _ => 0,
-                } as u16;
-                let cursor_x = modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + value_len;
-                let cursor_y = modal_area.y + 1 + field_index;
-                frame.set_cursor_position((cursor_x, cursor_y));
-            }
+        if matches!(form.field(), ScpField::Local | ScpField::Remote) {
+            let field_index = scp_field_index(form.field()) as u16;
+            let value_len = match form.field() {
+                ScpField::Local => form.local_path.len(),
+                ScpField::Remote => form.remote_path.len(),
+                _ => 0,
+            } as u16;
+            let cursor_x = modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + value_len;
+            let cursor_y = modal_area.y + 1 + field_index;
+            frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
 
@@ -819,37 +813,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
 }
 
 fn build_add_form_lines(form: &AddSessionForm) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(field_line(
-        "Name",
-        &form.name,
-        form.field() == AddField::Name,
-    ));
-    lines.push(field_line(
-        "Host",
-        &form.host,
-        form.field() == AddField::Host,
-    ));
-    lines.push(field_line(
-        "User",
-        &form.user,
-        form.field() == AddField::User,
-    ));
-    lines.push(field_line(
-        "Port",
-        &form.port,
-        form.field() == AddField::Port,
-    ));
-    lines.push(field_line(
-        "Identity",
-        &form.identity_file,
-        form.field() == AddField::Identity,
-    ));
-    lines.push(field_line(
-        "Tags",
-        &form.tags,
-        form.field() == AddField::Tags,
-    ));
+    let mut lines = vec![
+        field_line("Name", &form.name, form.field() == AddField::Name),
+        field_line("Host", &form.host, form.field() == AddField::Host),
+        field_line("User", &form.user, form.field() == AddField::User),
+        field_line("Port", &form.port, form.field() == AddField::Port),
+        field_line(
+            "Identity",
+            &form.identity_file,
+            form.field() == AddField::Identity,
+        ),
+        field_line("Tags", &form.tags, form.field() == AddField::Tags),
+    ];
 
     let identity_status = match form.identity_exists() {
         Some(true) => "yes",
@@ -1117,14 +1092,14 @@ fn update_identity_state(form: &mut AddSessionForm) {
     };
 
     let mut suggestions = Vec::new();
-    if dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(&prefix) {
-                    let suggestion = dir.join(&name).display().to_string();
-                    suggestions.push(suggestion);
-                }
+    if dir.exists()
+        && let Ok(entries) = std::fs::read_dir(&dir)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&prefix) {
+                let suggestion = dir.join(&name).display().to_string();
+                suggestions.push(suggestion);
             }
         }
     }
@@ -1134,10 +1109,10 @@ fn update_identity_state(form: &mut AddSessionForm) {
 }
 
 fn expand_tilde(input: &str) -> String {
-    if let Some(stripped) = input.strip_prefix("~/") {
-        if let Ok(home) = env::var("HOME") {
-            return format!("{}/{}", home, stripped);
-        }
+    if let Some(stripped) = input.strip_prefix("~/")
+        && let Ok(home) = env::var("HOME")
+    {
+        return format!("{}/{}", home, stripped);
     }
     input.to_string()
 }

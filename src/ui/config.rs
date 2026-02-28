@@ -4,22 +4,12 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct UiConfig {
     pub logo: LogoConfig,
     pub layout: LayoutConfig,
     pub theme: ThemeConfig,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            logo: LogoConfig::default(),
-            layout: LayoutConfig::default(),
-            theme: ThemeConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

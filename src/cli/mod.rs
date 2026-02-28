@@ -379,7 +379,10 @@ fn import_sessions(store: &JsonFileStore, args: ImportArgs) -> Result<()> {
                         }
                     }
                 }
-                "q" | _ => {
+                "q" => {
+                    println!("Aborted importing conflicts");
+                }
+                _ => {
                     println!("Aborted importing conflicts");
                 }
             }
@@ -420,18 +423,18 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
         match keyword.as_str() {
             "host" => {
                 // Save previous host if exists
-                if let Some(name) = current_host.take() {
-                    if let Some(hostname) = current_hostname.take() {
-                        sessions.push(Session {
-                            name,
-                            host: hostname,
-                            user: current_user.clone(),
-                            port: current_port,
-                            identity_file: current_identity.take(),
-                            tags: vec![],
-                            last_connected_at: None,
-                        });
-                    }
+                if let Some(name) = current_host.take()
+                    && let Some(hostname) = current_hostname.take()
+                {
+                    sessions.push(Session {
+                        name,
+                        host: hostname,
+                        user: current_user.clone(),
+                        port: current_port,
+                        identity_file: current_identity.take(),
+                        tags: vec![],
+                        last_connected_at: None,
+                    });
                 }
                 current_host = Some(value.to_string());
                 current_user = "root".to_string();
@@ -455,18 +458,18 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
     }
 
     // Save last host
-    if let Some(name) = current_host.take() {
-        if let Some(hostname) = current_hostname.take() {
-            sessions.push(Session {
-                name,
-                host: hostname,
-                user: current_user.clone(),
-                port: current_port,
-                identity_file: current_identity.take(),
-                tags: vec![],
-                last_connected_at: None,
-            });
-        }
+    if let Some(name) = current_host.take()
+        && let Some(hostname) = current_hostname.take()
+    {
+        sessions.push(Session {
+            name,
+            host: hostname,
+            user: current_user.clone(),
+            port: current_port,
+            identity_file: current_identity.take(),
+            tags: vec![],
+            last_connected_at: None,
+        });
     }
 
     Ok(sessions)
