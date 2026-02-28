@@ -39,6 +39,7 @@ Never commit private keys—reference `~/.ssh` identity files in session entries
 - Optional session monitor showing SSH host details (active PIDs, smart last-login).
 - Session tags for grouping/filtering.
 - Fast SCP workflows (send/receive) to a host.
+- Password authentication support with secure keyring storage and auto-detect fallback.
 
 ### Progress
 - Base CLI/TUI flow implemented (add/list/remove/tui, default to TUI, empty-store interactive add).
@@ -49,3 +50,5 @@ Never commit private keys—reference `~/.ssh` identity files in session entries
 - Optional session monitor (active PIDs + smart last-connected display).
 - CLI + TUI theme customization, CLI integration tests, and CI workflow.
 - Documentation updated for usage and config.
+- Password authentication infrastructure (Phase 1): keyring integration, model updates.
+- Password authentication CLI support (Phase 2): ssh2 backend, --password/--no-password flags, remove-password command.
