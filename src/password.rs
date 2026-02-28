@@ -46,8 +46,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "Requires running keyring service (D-Bus Secret Service)"]
     fn store_and_retrieve_password() {
-        let session_name = "test_session_store_retrieve";
+        let session_name = "test_session_store";
         let password = "test_password_123";
 
         // Store password
@@ -71,6 +72,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires running keyring service (D-Bus Secret Service)"]
     fn has_password_returns_correct_status() {
         let session_name = "test_session_has_password";
 
@@ -91,6 +93,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires running keyring service (D-Bus Secret Service)"]
     fn delete_password_removes_stored_password() {
         let session_name = "test_session_delete";
 
@@ -112,6 +115,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires running keyring service (D-Bus Secret Service)"]
     fn update_password_overwrites_existing() {
         let session_name = "test_session_update";
 
@@ -134,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires running keyring service (D-Bus Secret Service)"]
     fn multiple_sessions_have_separate_passwords() {
         let session1 = "test_session_1";
         let session2 = "test_session_2";
