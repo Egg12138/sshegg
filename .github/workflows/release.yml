@@ -59,11 +59,15 @@ jobs:
         if: ${{ runner.os != 'Windows' }}
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
+      - name: Rename binary to se
+        run: mv target/${{ matrix.target }}/release/${{ matrix.artifact_name }} target/${{ matrix.target }}/release/se
+        shell: bash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          path: target/${{ matrix.target }}/release/se
 
   create-release:
     name: Create GitHub release
@@ -109,8 +113,8 @@ jobs:
           # Download and install (example for Linux x86_64)
           curl -LO https://github.com/${{ github.repository }}/releases/download/v${VERSION}/ssher-x86_64-unknown-linux-gnu.tar.gz
           tar xzf ssher-x86_64-unknown-linux-gnu.tar.gz
-          chmod +x ssher
-          ./ssher --help
+          chmod +x se
+          ./se --help
           \`\`\`
 
           ### Checksums
