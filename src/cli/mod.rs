@@ -1,7 +1,10 @@
 mod output;
 mod theme;
 
+use crate::ssh::{AuthConfig, SshConnection};
+
 use crate::model::Session;
+use crate::password;
 use crate::store::{JsonFileStore, resolve_store_path};
 use crate::ui;
 use anyhow::{Context, Result, anyhow};
@@ -9,7 +12,6 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +38,7 @@ enum Commands {
     Export(ExportArgs),
     Import(ImportArgs),
     Remove(RemoveArgs),
+    RemovePassword(RemovePasswordArgs),
     Tui,
     Scp(ScpArgs),
     Completions(CompletionsArgs),
@@ -60,10 +63,20 @@ struct AddArgs {
         value_delimiter = ','
     )]
     tags: Vec<String>,
+    #[arg(long)]
+    password: bool,
+    #[arg(long = "no-password")]
+    no_password: bool,
 }
 
 #[derive(Args)]
 struct RemoveArgs {
+    #[arg(long)]
+    name: String,
+}
+
+#[derive(Args)]
+struct RemovePasswordArgs {
     #[arg(long)]
     name: String,
 }
@@ -169,6 +182,7 @@ pub fn run() -> Result<()> {
                 Some(Commands::Export(args)) => export_sessions(&store, args),
                 Some(Commands::Import(args)) => import_sessions(&store, args),
                 Some(Commands::Remove(args)) => remove_session(&store, &args.name),
+                Some(Commands::RemovePassword(args)) => remove_password(&store, &args.name),
                 Some(Commands::Tui) | None => {
                     let ui_config = ui::load_ui_config(cli.ui_config)?;
                     run_tui(&store, &ui_config)
@@ -181,7 +195,7 @@ pub fn run() -> Result<()> {
 }
 
 fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
-    let session = Session {
+    let mut session = Session {
         name: args.name,
         host: args.host,
         user: args.user,
@@ -191,6 +205,19 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
         last_connected_at: None,
         has_stored_password: false,
     };
+
+    if args.password && args.no_password {
+        return Err(anyhow!("Cannot specify both --password and --no-password"));
+    }
+
+    if args.no_password {
+        session.has_stored_password = false;
+    } else if args.password {
+        let pwd = rpassword::prompt_password(format!("Enter password for {}: ", session.name))?;
+        password::store_password(&session.name, &pwd)?;
+        session.has_stored_password = true;
+    }
+
     store.add(session.clone())?;
     println!("Added session: {}", session.name);
     Ok(())
@@ -484,6 +511,25 @@ fn remove_session(store: &JsonFileStore, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn remove_password(store: &JsonFileStore, name: &str) -> Result<()> {
+    let mut sessions = store.list()?;
+    let session = sessions
+        .iter_mut()
+        .find(|s| s.name == name)
+        .ok_or_else(|| anyhow!("session '{}' not found", name))?;
+
+    if !session.has_stored_password {
+        println!("Session '{}' does not have a stored password", name);
+        return Ok(());
+    }
+
+    password::delete_password(name)?;
+    session.has_stored_password = false;
+    store.update(session.clone())?;
+    println!("Removed password for session: {}", name);
+    Ok(())
+}
+
 fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
     let mut sessions = store.list()?;
     let session = sessions
@@ -529,18 +575,21 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
 }
 
 fn run_ssh(session: &Session) -> Result<()> {
-    let mut command = Command::new("ssh");
-    if let Some(identity) = &session.identity_file {
-        command.arg("-i").arg(identity);
-    }
-    command
-        .arg("-p")
-        .arg(session.port.to_string())
-        .arg(session.target());
-    let status = command.status().context("failed to execute ssh")?;
-    if !status.success() {
-        return Err(anyhow!("ssh exited with status {}", status));
-    }
+    let auth_config = AuthConfig {
+        identity_file: session
+            .identity_file
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        password_from_keyring: session.has_stored_password,
+        password: None,
+        no_password: !session.has_stored_password && session.identity_file.is_none(),
+    };
+
+    let mut connection =
+        SshConnection::connect(&session.host, session.port, &session.user, &auth_config)?;
+
+    connection.shell()?;
+
     Ok(())
 }
 
@@ -551,34 +600,32 @@ fn run_scp(store: &JsonFileStore, args: ScpArgs) -> Result<()> {
         .find(|session| session.name == args.name)
         .ok_or_else(|| anyhow!("session '{}' not found", args.name))?;
 
-    let mut command = Command::new("scp");
-    if args.recursive {
-        command.arg("-r");
-    }
-    if let Some(identity) = &session.identity_file {
-        command.arg("-i").arg(identity);
-    }
-    command.arg("-P").arg(session.port.to_string());
+    let auth_config = AuthConfig {
+        identity_file: session
+            .identity_file
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        password_from_keyring: session.has_stored_password,
+        password: None,
+        no_password: !session.has_stored_password && session.identity_file.is_none(),
+    };
 
-    let remote_target = format!(
-        "{}@{}:{}",
-        session.user,
-        session.host,
-        args.remote.display()
-    );
+    let connection =
+        SshConnection::connect(&session.host, session.port, &session.user, &auth_config)?;
+
     match args.direction {
         ScpDirection::To => {
-            command.arg(args.local).arg(remote_target);
+            connection
+                .upload(&args.local, args.remote.to_str().unwrap())
+                .context("failed to upload file")?;
         }
         ScpDirection::From => {
-            command.arg(remote_target).arg(args.local);
+            connection
+                .download(args.remote.to_str().unwrap(), &args.local)
+                .context("failed to download file")?;
         }
     }
 
-    let status = command.status().context("failed to execute scp")?;
-    if !status.success() {
-        return Err(anyhow!("scp exited with status {}", status));
-    }
     store.touch_last_connected(&session.name, now_epoch_seconds())?;
     Ok(())
 }

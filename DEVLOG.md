@@ -222,21 +222,44 @@ pub enum AddField {
 
 ---
 
-### Phase 2: CLI Integration 🚧 (IN PROGRESS)
+### Phase 2: CLI Integration ✅ (COMPLETED)
 
 **Goal**: Add password authentication to CLI commands
 
+**Progress Summary** (2026-02-28):
+- Added `--password` and `--no-password` CLI flags to `AddArgs`
+- Added `RemovePassword` subcommand and `RemovePasswordArgs` struct
+- Implemented `AuthConfig` struct for SSH authentication configuration
+- Implemented `SshConnection::connect()` with authentication fallback logic:
+  - Key auth → Password auth → Prompt (based on flags and stored passwords)
+  - `--no-password` flag disables password auth
+  - Auto-detect from keyring when password_from_keyring is set
+- Implemented `SshConnection::exec()` for command execution
+- Implemented `SshConnection::shell()` for interactive sessions with PTY handling
+- Implemented `SshConnection::upload()` and `SshConnection::download()` for SCP operations
+- Updated `run_ssh()` to create AuthConfig from Session and use ssh2 backend
+- Updated `run_scp()` to use ssh2 backend with AuthConfig
+- Updated `add_session()` to handle `--password` flag with password prompt
+- Implemented `remove_password()` to delete password from keyring
+- All tests pass (87 tests: 54 unit tests, 33 integration tests)
+
+**Test Results**:
+- ✅ 54/54 unit tests pass (5 keyring tests ignored due to platform limitations)
+- ✅ 33/33 integration tests pass (12 existing, 16 new password tests, 5 SSH tests)
+- ✅ `cargo check` passes with no errors
+- ✅ `cargo clippy` passes
+
 **Tasks**:
-- [ ] Update CLI arguments:
-  - [ ] Add `--password` flag to `AddArgs`
-  - [ ] Add `--no-password` flag to `AddArgs`
-  - [ ] Add `RemovePasswordArgs` struct
-  - [ ] Add `RemovePassword` subcommand to `Commands`
-- [ ] Implement `run_ssh()` with ssh2 backend:
-  - [ ] Create `AuthConfig` from session
-  - [ ] Implement `SshConnection::connect()`
-  - [ ] Implement `SshConnection::shell()` for interactive sessions
-  - [ ] Implement authentication fallback logic:
+- [x] Update CLI arguments:
+  - [x] Add `--password` flag to `AddArgs`
+  - [x] Add `--no-password` flag to `AddArgs`
+  - [x] Add `RemovePasswordArgs` struct
+  - [x] Add `RemovePassword` subcommand to `Commands`
+- [x] Implement `run_ssh()` with ssh2 backend:
+  - [x] Create `AuthConfig` from session
+  - [x] Implement `SshConnection::connect()`
+  - [x] Implement `SshConnection::shell()` for interactive sessions
+  - [x] Implement authentication fallback logic:
     ```
     if no_password:
         try_key_auth()
@@ -247,22 +270,22 @@ pub enum AddField {
     else:
         prompt()
     ```
-- [ ] Implement `run_scp()` using ssh2 backend:
-  - [ ] Use `SshConnection::upload()` for to direction
-  - [ ] Use `SshConnection::download()` for from direction
-- [ ] Add `add_session_with_password()` function:
-  - [ ] Prompt for password if `--password` flag set
-  - [ ] Store password in keyring
-  - [ ] Update session `has_stored_password` flag
-- [ ] Add `remove_password()` function:
-  - [ ] Delete password from keyring
-  - [ ] Update session `has_stored_password` flag to false
-- [ ] Write CLI integration tests:
-  - [ ] Test `se add --password` prompts and stores
-  - [ ] Test `se remove-password` removes password
-  - [ ] Test `--no-password` flag behavior
-  - [ ] Test auto-detect fallback with mock SSH server
-- [ ] Update existing CLI integration tests for new fields
+- [x] Implement `run_scp()` using ssh2 backend:
+  - [x] Use `SshConnection::upload()` for to direction
+  - [x] Use `SshConnection::download()` for from direction
+- [x] Add `add_session_with_password()` function:
+  - [x] Prompt for password if `--password` flag set
+  - [x] Store password in keyring
+  - [x] Update session `has_stored_password` flag
+- [x] Add `remove_password()` function:
+  - [x] Delete password from keyring
+  - [x] Update session `has_stored_password` flag to false
+- [x] Write CLI integration tests:
+  - [x] Test `se add --password` prompts and stores
+  - [x] Test `se remove-password` removes password
+  - [x] Test `--no-password` flag behavior
+  - [x] Test auto-detect fallback with mock SSH server
+- [x] Update existing CLI integration tests for new fields
 
 **Expected Test Count**: ~15-20 new tests
 

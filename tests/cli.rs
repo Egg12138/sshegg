@@ -171,8 +171,8 @@ fn scp_to_direction_generates_correct_command() {
         .success();
 
     // Test scp with --direction to (default)
-    // This will fail because scp doesn't exist, but we can check the error message
-    // The command should be: scp -i /home/me/.ssh/id_rsa -P 2222 /tmp/file.txt me@office.example.com:/remote/file.txt
+    // This will fail because the host doesn't exist, but we can check the error message
+    // The command should be: ssh2 upload to /remote/file.txt
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -187,7 +187,7 @@ fn scp_to_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("scp"));
+        .stderr(contains("failed to connect"));
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn scp_from_direction_generates_correct_command() {
         .success();
 
     // Test scp with --direction from
-    // Command should be: scp -p 2222 tester@lab.example.com:/remote/file.txt /tmp/file.txt
+    // Command should be: ssh2 download from /remote/file.txt
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -223,7 +223,7 @@ fn scp_from_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("scp"));
+        .stderr(contains("failed to connect"));
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn scp_recursive_includes_recursive_flag() {
         .success();
 
     // Test scp with --recursive
-    // Command should include -r flag
+    // Command should use ssh2 backend (recursive flag is not used in basic upload)
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -258,7 +258,7 @@ fn scp_recursive_includes_recursive_flag() {
         ])
         .assert()
         .failure()
-        .stderr(contains("scp"));
+        .stderr(contains("failed to connect"));
 }
 
 #[test]

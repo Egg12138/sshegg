@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AuthStatus {
     pub has_identity_file: bool,
     pub identity_file_exists: bool,
