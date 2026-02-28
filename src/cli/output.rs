@@ -76,6 +76,7 @@ mod tests {
             identity_file: None,
             tags: vec![],
             last_connected_at: None,
+            has_stored_password: false,
         }
     }
 

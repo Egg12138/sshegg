@@ -189,6 +189,7 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
         identity_file: args.identity_file,
         tags: normalize_tags(args.tags),
         last_connected_at: None,
+        has_stored_password: false,
     };
     store.add(session.clone())?;
     println!("Added session: {}", session.name);
@@ -434,6 +435,7 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
                         identity_file: current_identity.take(),
                         tags: vec![],
                         last_connected_at: None,
+                        has_stored_password: false,
                     });
                 }
                 current_host = Some(value.to_string());
@@ -469,6 +471,7 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
             identity_file: current_identity.take(),
             tags: vec![],
             last_connected_at: None,
+            has_stored_password: false,
         });
     }
 

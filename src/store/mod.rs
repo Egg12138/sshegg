@@ -143,6 +143,7 @@ mod tests {
             identity_file: None,
             tags: Vec::new(),
             last_connected_at: None,
+            has_stored_password: false,
         }
     }
 

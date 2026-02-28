@@ -950,6 +950,7 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
         identity_file,
         tags,
         last_connected_at: None,
+        has_stored_password: false,
     };
 
     if let Err(err) = store.add(session.clone()) {
@@ -1008,6 +1009,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
         identity_file,
         tags,
         last_connected_at: None,
+        has_stored_password: false,
     };
 
     if let Err(err) = store.update(session.clone()) {

@@ -1,5 +1,7 @@
 mod cli;
 mod model;
+mod password;
+mod ssh;
 mod store;
 mod ui;
 

@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
+pub struct AuthStatus {
+    pub has_identity_file: bool,
+    pub identity_file_exists: bool,
+    pub has_stored_password: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
     pub name: String,
@@ -13,11 +20,30 @@ pub struct Session {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "should_skip_auth_indicator")]
+    pub has_stored_password: bool,
+}
+
+fn should_skip_auth_indicator(b: &bool) -> bool {
+    !b
 }
 
 impl Session {
     pub fn target(&self) -> String {
         format!("{}@{}", self.user, self.host)
+    }
+
+    pub fn auth_status(&self) -> AuthStatus {
+        let has_key = self
+            .identity_file
+            .as_ref()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        AuthStatus {
+            has_identity_file: self.identity_file.is_some(),
+            identity_file_exists: has_key,
+            has_stored_password: self.has_stored_password,
+        }
     }
 }
 
@@ -36,6 +62,7 @@ mod tests {
             identity_file: None,
             tags: vec![],
             last_connected_at: None,
+            has_stored_password: false,
         };
         assert_eq!(session.target(), "alice@example.com");
     }
@@ -50,6 +77,7 @@ mod tests {
             identity_file: Some(PathBuf::from("/home/bob/.ssh/id_rsa")),
             tags: vec!["work".to_string(), "prod".to_string()],
             last_connected_at: Some(1234567890),
+            has_stored_password: true,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains(r#""name":"office""#));
@@ -59,6 +87,7 @@ mod tests {
         assert!(json.contains(r#""identity_file":"/home/bob/.ssh/id_rsa"#));
         assert!(json.contains(r#""tags":["work","prod"]"#));
         assert!(json.contains(r#""last_connected_at":1234567890"#));
+        assert!(json.contains(r#""has_stored_password":true"#));
     }
 
     #[test]
@@ -110,9 +139,102 @@ mod tests {
             identity_file: Some(PathBuf::from("/key")),
             tags: vec!["a".to_string(), "b".to_string()],
             last_connected_at: Some(999),
+            has_stored_password: false,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn auth_status_with_identity_file() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: Some(PathBuf::from("/nonexistent/key")),
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+        };
+
+        let status = session.auth_status();
+        assert!(status.has_identity_file);
+        assert!(!status.identity_file_exists);
+        assert!(!status.has_stored_password);
+    }
+
+    #[test]
+    fn auth_status_with_password_only() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+        };
+
+        let status = session.auth_status();
+        assert!(!status.has_identity_file);
+        assert!(!status.identity_file_exists);
+        assert!(status.has_stored_password);
+    }
+
+    #[test]
+    fn auth_status_with_both_auth_methods() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: Some(PathBuf::from("/existent/key")),
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+        };
+
+        let status = session.auth_status();
+        assert!(status.has_identity_file);
+        assert!(!status.identity_file_exists); // File doesn't actually exist
+        assert!(status.has_stored_password);
+    }
+
+    #[test]
+    fn has_stored_password_field_is_skipped_when_false() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(!json.contains("has_stored_password"));
+    }
+
+    #[test]
+    fn has_stored_password_field_is_included_when_true() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("has_stored_password"));
+        assert!(json.contains(r#""has_stored_password":true"#));
     }
 }
