@@ -813,6 +813,13 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
 }
 
 fn build_add_form_lines(form: &AddSessionForm) -> Vec<String> {
+    // Mask password display
+    let password_display = if form.password.is_empty() {
+        String::new()
+    } else {
+        "*".repeat(form.password.len())
+    };
+
     let mut lines = vec![
         field_line("Name", &form.name, form.field() == AddField::Name),
         field_line("Host", &form.host, form.field() == AddField::Host),
@@ -822,6 +829,11 @@ fn build_add_form_lines(form: &AddSessionForm) -> Vec<String> {
             "Identity",
             &form.identity_file,
             form.field() == AddField::Identity,
+        ),
+        field_line(
+            "Password",
+            &password_display,
+            form.field() == AddField::Password,
         ),
         field_line("Tags", &form.tags, form.field() == AddField::Tags),
     ];
@@ -893,7 +905,8 @@ fn add_field_index(field: AddField) -> usize {
         AddField::User => 2,
         AddField::Port => 3,
         AddField::Identity => 4,
-        AddField::Tags => 5,
+        AddField::Password => 5,
+        AddField::Tags => 6,
     }
 }
 
@@ -916,6 +929,7 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     let user = form.user.trim().to_string();
     let port_input = form.port.trim().to_string();
     let identity_input = form.identity_file.trim().to_string();
+    let password = form.password.clone();
     let tags_input = form.tags.clone();
 
     if name.is_empty() || host.is_empty() || user.is_empty() {
@@ -942,6 +956,21 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     };
 
     let tags = split_tags(&tags_input);
+
+    // Store password in keyring if provided
+    let has_stored_password = if !password.is_empty() {
+        use crate::password;
+        match password::store_password(&name, &password) {
+            Ok(_) => true,
+            Err(e) => {
+                app.set_status(format!("Failed to store password: {}", e));
+                return Ok(());
+            }
+        }
+    } else {
+        false
+    };
+
     let session = Session {
         name: name.clone(),
         host,
@@ -950,7 +979,7 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
         identity_file,
         tags,
         last_connected_at: None,
-        has_stored_password: false,
+        has_stored_password,
     };
 
     if let Err(err) = store.add(session.clone()) {
@@ -975,6 +1004,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     let user = form.user.trim().to_string();
     let port_input = form.port.trim().to_string();
     let identity_input = form.identity_file.trim().to_string();
+    let password = form.password.clone();
     let tags_input = form.tags.clone();
 
     if name.is_empty() || host.is_empty() || user.is_empty() {
@@ -1001,6 +1031,27 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     };
 
     let tags = split_tags(&tags_input);
+
+    // Handle password update - preserve existing if no new password provided
+    let has_stored_password = if !password.is_empty() {
+        use crate::password;
+        match password::store_password(&name, &password) {
+            Ok(_) => true,
+            Err(e) => {
+                app.set_status(format!("Failed to store password: {}", e));
+                return Ok(());
+            }
+        }
+    } else {
+        // Preserve existing password status when editing
+        store
+            .list()?
+            .iter()
+            .find(|s| s.name == original_name)
+            .map(|s| s.has_stored_password)
+            .unwrap_or(false)
+    };
+
     let session = Session {
         name: name.clone(),
         host,
@@ -1009,7 +1060,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
         identity_file,
         tags,
         last_connected_at: None,
-        has_stored_password: false,
+        has_stored_password,
     };
 
     if let Err(err) = store.update(session.clone()) {

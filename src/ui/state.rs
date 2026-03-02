@@ -305,6 +305,7 @@ pub enum AddField {
     User,
     Port,
     Identity,
+    Password,
     Tags,
 }
 
@@ -315,7 +316,8 @@ impl AddField {
             AddField::Host => AddField::User,
             AddField::User => AddField::Port,
             AddField::Port => AddField::Identity,
-            AddField::Identity => AddField::Tags,
+            AddField::Identity => AddField::Password,
+            AddField::Password => AddField::Tags,
             AddField::Tags => AddField::Name,
         }
     }
@@ -327,7 +329,8 @@ impl AddField {
             AddField::User => AddField::Host,
             AddField::Port => AddField::User,
             AddField::Identity => AddField::Port,
-            AddField::Tags => AddField::Identity,
+            AddField::Password => AddField::Identity,
+            AddField::Tags => AddField::Password,
         }
     }
 }
@@ -338,6 +341,7 @@ pub struct AddSessionForm {
     pub user: String,
     pub port: String,
     pub identity_file: String,
+    pub password: String,
     pub tags: String,
     field: AddField,
     identity_exists: Option<bool>,
@@ -352,6 +356,7 @@ impl AddSessionForm {
             user: default_user.unwrap_or_default(),
             port: "22".to_string(),
             identity_file: String::new(),
+            password: String::new(),
             tags: String::new(),
             field: AddField::Name,
             identity_exists: None,
@@ -370,6 +375,7 @@ impl AddSessionForm {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            password: String::new(), // Don't load existing password
             tags: session.tags.join(","),
             field: AddField::Name,
             identity_exists: None,
@@ -396,6 +402,7 @@ impl AddSessionForm {
             AddField::User => &self.user,
             AddField::Port => &self.port,
             AddField::Identity => &self.identity_file,
+            AddField::Password => &self.password,
             AddField::Tags => &self.tags,
         }
     }
@@ -407,6 +414,7 @@ impl AddSessionForm {
             AddField::User => &mut self.user,
             AddField::Port => &mut self.port,
             AddField::Identity => &mut self.identity_file,
+            AddField::Password => &mut self.password,
             AddField::Tags => &mut self.tags,
         }
     }
