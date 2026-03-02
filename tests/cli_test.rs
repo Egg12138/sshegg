@@ -518,3 +518,37 @@ fn password_flag_accepted_by_parser() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("Added session:"));
     }
 }
+
+#[test]
+fn session_with_stored_password_flag_includes_has_password() {
+    use std::fs;
+
+    let session_name = "test_auto_password_session";
+    let (_dir, store_path) = store_path();
+
+    // Add session with --no-password flag (explicit no password)
+    ssher_cmd(&store_path)
+        .args([
+            "add",
+            "--name",
+            session_name,
+            "--host",
+            "auto.example.com",
+            "--user",
+            "autouser",
+            "--no-password",
+        ])
+        .assert()
+        .success();
+
+    // Verify session was created
+    let content = fs::read_to_string(&store_path).unwrap();
+    assert!(content.contains(session_name));
+    // With --no-password, has_stored_password should be false (skipped in JSON)
+    assert!(!content.contains("has_stored_password"));
+
+    ssher_cmd(&store_path)
+        .args(["remove", "--name", session_name])
+        .assert()
+        .success();
+}
