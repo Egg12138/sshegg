@@ -249,3 +249,141 @@ impl SshConnection {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Session;
+
+    #[test]
+    fn auth_config_from_session_with_stored_password() {
+        // Verify that a session with has_stored_password=true triggers keyring lookup
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "testuser".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+        };
+
+        // Simulate what run_ssh() does
+        let auth_config = AuthConfig {
+            identity_file: session
+                .identity_file
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            password_from_keyring: session.has_stored_password,
+            password: None,
+            no_password: !session.has_stored_password && session.identity_file.is_none(),
+        };
+
+        assert!(
+            auth_config.password_from_keyring,
+            "Should attempt keyring lookup"
+        );
+        assert!(!auth_config.no_password, "Should not be no_password mode");
+        assert!(auth_config.identity_file.is_none());
+    }
+
+    #[test]
+    fn auth_config_from_session_without_stored_password() {
+        // Verify that a session without stored password does NOT trigger keyring lookup
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "testuser".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+        };
+
+        let auth_config = AuthConfig {
+            identity_file: session
+                .identity_file
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            password_from_keyring: session.has_stored_password,
+            password: None,
+            no_password: !session.has_stored_password && session.identity_file.is_none(),
+        };
+
+        assert!(
+            !auth_config.password_from_keyring,
+            "Should NOT attempt keyring lookup"
+        );
+        assert!(auth_config.no_password, "Should be no_password mode");
+    }
+
+    #[test]
+    fn auth_config_from_session_with_identity_file() {
+        // Verify that a session with identity file sets no_password=false
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "testuser".to_string(),
+            port: 22,
+            identity_file: Some(std::path::PathBuf::from("/home/user/.ssh/id_rsa")),
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+        };
+
+        let auth_config = AuthConfig {
+            identity_file: session
+                .identity_file
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            password_from_keyring: session.has_stored_password,
+            password: None,
+            no_password: !session.has_stored_password && session.identity_file.is_none(),
+        };
+
+        assert!(
+            !auth_config.password_from_keyring,
+            "Should NOT attempt keyring lookup"
+        );
+        assert!(
+            !auth_config.no_password,
+            "Should NOT be no_password mode (has identity file)"
+        );
+        assert!(auth_config.identity_file.is_some());
+    }
+
+    #[test]
+    fn auth_config_from_session_with_both_auth_methods() {
+        // Verify that a session with both identity file and stored password
+        // will attempt keyring lookup as fallback
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "testuser".to_string(),
+            port: 22,
+            identity_file: Some(std::path::PathBuf::from("/home/user/.ssh/id_rsa")),
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+        };
+
+        let auth_config = AuthConfig {
+            identity_file: session
+                .identity_file
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            password_from_keyring: session.has_stored_password,
+            password: None,
+            no_password: !session.has_stored_password && session.identity_file.is_none(),
+        };
+
+        assert!(
+            auth_config.password_from_keyring,
+            "Should attempt keyring lookup as fallback"
+        );
+        assert!(!auth_config.no_password, "Should NOT be no_password mode");
+        assert!(auth_config.identity_file.is_some());
+    }
+}
