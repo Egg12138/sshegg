@@ -21,7 +21,12 @@ pub struct SshConnection {
     session: Ssh2Session,
 }
 
-fn poll_shell_fds(stdin_fd: i32, session_fd: i32, watch_stdin: bool, watch_write: bool) -> Result<bool> {
+fn poll_shell_fds(
+    stdin_fd: i32,
+    session_fd: i32,
+    watch_stdin: bool,
+    watch_write: bool,
+) -> Result<bool> {
     let stdin_events = if watch_stdin { libc::POLLIN } else { 0 };
     let session_events = libc::POLLIN | if watch_write { libc::POLLOUT } else { 0 };
     let mut fds = [
@@ -228,8 +233,8 @@ impl SshConnection {
                         }
                         // libssh2 reports EAGAIN as session error -37 when nonblocking I/O
                         // needs the socket to become writable before sending EOF.
-                        Err(ref err)
-                            if matches!(err.code(), ssh2::ErrorCode::Session(code) if code == -37) => {}
+                        Err(ref err) if matches!(err.code(), ssh2::ErrorCode::Session(code) if code == -37) =>
+                            {}
                         Err(err) => return Err(err).context("failed to send SSH EOF"),
                     }
                 }
@@ -240,8 +245,12 @@ impl SshConnection {
                     break;
                 }
 
-                let stdin_ready =
-                    poll_shell_fds(stdin_fd, session_fd, !stdin_closed, !pending_input.is_empty() || (stdin_closed && !sent_eof))?;
+                let stdin_ready = poll_shell_fds(
+                    stdin_fd,
+                    session_fd,
+                    !stdin_closed,
+                    !pending_input.is_empty() || (stdin_closed && !sent_eof),
+                )?;
 
                 if stdin_ready {
                     match stdin.read(&mut stdin_buffer) {
@@ -469,5 +478,4 @@ mod tests {
         assert!(!auth_config.no_password, "Should NOT be no_password mode");
         assert!(auth_config.identity_file.is_some());
     }
-
 }
