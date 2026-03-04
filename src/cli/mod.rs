@@ -40,6 +40,7 @@ enum Commands {
     Remove(RemoveArgs),
     RemovePassword(RemovePasswordArgs),
     Tui,
+    Go(GoArgs),
     Scp(ScpArgs),
     Completions(CompletionsArgs),
 }
@@ -82,6 +83,12 @@ struct RemovePasswordArgs {
 }
 
 #[derive(Args)]
+struct GoArgs {
+    #[arg(long)]
+    name: String,
+}
+
+#[derive(Args)]
 struct UpdateArgs {
     #[arg(long)]
     name: String,
@@ -100,6 +107,10 @@ struct UpdateArgs {
         value_delimiter = ','
     )]
     tags: Vec<String>,
+    #[arg(long)]
+    password: bool,
+    #[arg(long = "no-password")]
+    no_password: bool,
 }
 
 #[derive(Args)]
@@ -187,6 +198,7 @@ pub fn run() -> Result<()> {
                     let ui_config = ui::load_ui_config(cli.ui_config)?;
                     run_tui(&store, &ui_config)
                 }
+                Some(Commands::Go(args)) => run_go(&store, args),
                 Some(Commands::Scp(args)) => run_scp(&store, args),
                 Some(Commands::Completions(_)) => unreachable!(),
             }
@@ -553,6 +565,22 @@ fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
         session.tags = normalize_tags(args.tags);
     }
 
+    // Handle password update
+    if args.password && args.no_password {
+        return Err(anyhow!("Cannot specify both --password and --no-password"));
+    }
+
+    if args.no_password {
+        // Remove stored password
+        password::delete_password(&args.name)?;
+        session.has_stored_password = false;
+    } else if args.password {
+        // Update stored password
+        let pwd = rpassword::prompt_password(format!("Enter new password for {}: ", args.name))?;
+        password::store_password(&args.name, &pwd)?;
+        session.has_stored_password = true;
+    }
+
     store.update(session.clone())?;
     println!("Updated session: {}", session.name);
     Ok(())
@@ -583,6 +611,7 @@ fn run_ssh(session: &Session) -> Result<()> {
         password_from_keyring: session.has_stored_password,
         password: None,
         no_password: !session.has_stored_password && session.identity_file.is_none(),
+        session_name: Some(session.name.clone()),
     };
 
     let mut connection =
@@ -590,6 +619,18 @@ fn run_ssh(session: &Session) -> Result<()> {
 
     connection.shell()?;
 
+    Ok(())
+}
+
+fn run_go(store: &JsonFileStore, args: GoArgs) -> Result<()> {
+    let session = store
+        .list()?
+        .into_iter()
+        .find(|session| session.name == args.name)
+        .ok_or_else(|| anyhow!("session '{}' not found", args.name))?;
+
+    run_ssh(&session)?;
+    store.touch_last_connected(&session.name, now_epoch_seconds())?;
     Ok(())
 }
 
@@ -608,6 +649,7 @@ fn run_scp(store: &JsonFileStore, args: ScpArgs) -> Result<()> {
         password_from_keyring: session.has_stored_password,
         password: None,
         no_password: !session.has_stored_password && session.identity_file.is_none(),
+        session_name: Some(session.name.clone()),
     };
 
     let connection =

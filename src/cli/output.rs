@@ -11,12 +11,13 @@ pub fn print_sessions(sessions: &[Session], theme: &CliTheme) {
 
     let use_color = theme.enabled && std::io::stdout().is_terminal();
     println!(
-        "{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}",
         colorize("NAME", theme.header, use_color),
         colorize("TARGET", theme.header, use_color),
         colorize("PORT", theme.header, use_color),
         colorize("IDENTITY", theme.header, use_color),
-        colorize("TAGS", theme.header, use_color)
+        colorize("TAGS", theme.header, use_color),
+        colorize("PWD", theme.header, use_color)
     );
     for session in sessions {
         let identity = session
@@ -29,13 +30,19 @@ pub fn print_sessions(sessions: &[Session], theme: &CliTheme) {
         } else {
             session.tags.join(",")
         };
+        let password_indicator = if session.has_stored_password {
+            "★"
+        } else {
+            "-"
+        };
         println!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             colorize(&session.name, theme.name, use_color),
             colorize(&session.target(), theme.target, use_color),
             colorize(&session.port.to_string(), theme.port, use_color),
             colorize(&identity, theme.identity, use_color),
-            colorize(&tags, theme.tags, use_color)
+            colorize(&tags, theme.tags, use_color),
+            colorize(password_indicator, theme.tags, use_color)
         );
     }
 }

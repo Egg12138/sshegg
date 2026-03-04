@@ -512,6 +512,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         Cell::from("Port"),
         Cell::from("Identity"),
         Cell::from("Tags"),
+        Cell::from("Pwd"),
     ])
     .style(
         Style::default()
@@ -530,12 +531,18 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         } else {
             session.tags.join(",")
         };
+        let password_indicator = if session.has_stored_password {
+            "★"
+        } else {
+            "-"
+        };
         Row::new(vec![
             Cell::from(session.name.clone()),
             Cell::from(session.target()),
             Cell::from(session.port.to_string()),
             Cell::from(identity),
             Cell::from(tags),
+            Cell::from(password_indicator),
         ])
     });
 
@@ -547,6 +554,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             Constraint::Length(6),
             Constraint::Length(18),
             Constraint::Min(10),
+            Constraint::Length(5),
         ],
     )
     .header(header)

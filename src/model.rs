@@ -34,6 +34,7 @@ impl Session {
         format!("{}@{}", self.user, self.host)
     }
 
+    #[allow(dead_code)]
     pub fn auth_status(&self) -> AuthStatus {
         let has_key = self
             .identity_file

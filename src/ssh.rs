@@ -5,18 +5,50 @@ use crate::password;
 use anyhow::{Context, Result, anyhow};
 use ssh2::Session as Ssh2Session;
 use std::net::TcpStream;
+use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub struct AuthConfig {
     pub identity_file: Option<String>,
     pub password: Option<String>,
     pub password_from_keyring: bool,
     pub no_password: bool,
+    pub session_name: Option<String>,
 }
 
 pub struct SshConnection {
     session: Ssh2Session,
+}
+
+fn poll_shell_fds(stdin_fd: i32, session_fd: i32, watch_stdin: bool, watch_write: bool) -> Result<bool> {
+    let stdin_events = if watch_stdin { libc::POLLIN } else { 0 };
+    let session_events = libc::POLLIN | if watch_write { libc::POLLOUT } else { 0 };
+    let mut fds = [
+        libc::pollfd {
+            fd: stdin_fd,
+            events: stdin_events,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: session_fd,
+            events: session_events,
+            revents: 0,
+        },
+    ];
+
+    loop {
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 100) };
+        if rc >= 0 {
+            return Ok(watch_stdin && (fds[0].revents & libc::POLLIN) != 0);
+        }
+
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(err).context("failed to poll SSH shell file descriptors");
+    }
 }
 
 impl SshConnection {
@@ -26,6 +58,12 @@ impl SshConnection {
         let mut sess = Ssh2Session::new().context("failed to create SSH session")?;
         sess.set_tcp_stream(tcp);
         sess.handshake().context("SSH handshake failed")?;
+
+        // Build the keyring lookup key from session_name or fallback to user@host
+        let keyring_key: String = match &auth_config.session_name {
+            Some(name) => name.clone(),
+            None => format!("{}@{}", user, host),
+        };
 
         let auth_result = if auth_config.no_password {
             if let Some(identity) = &auth_config.identity_file {
@@ -40,10 +78,9 @@ impl SshConnection {
                     if let Some(pwd) = &auth_config.password {
                         Self::try_password_auth(&sess, user, pwd)
                     } else if auth_config.password_from_keyring {
-                        if let Some(pwd) = password::get_password(&format!("{}@{}", user, host))? {
-                            Self::try_password_auth(&sess, user, &pwd)
-                        } else {
-                            Err(anyhow!("Authentication failed"))
+                        match password::get_password(&keyring_key) {
+                            Ok(Some(pwd)) => Self::try_password_auth(&sess, user, &pwd),
+                            _ => Err(anyhow!("Authentication failed")),
                         }
                     } else {
                         Err(anyhow!("Authentication failed"))
@@ -53,10 +90,9 @@ impl SshConnection {
         } else if let Some(pwd) = &auth_config.password {
             Self::try_password_auth(&sess, user, pwd)
         } else if auth_config.password_from_keyring {
-            if let Some(pwd) = password::get_password(&format!("{}@{}", user, host))? {
-                Self::try_password_auth(&sess, user, &pwd)
-            } else {
-                Err(anyhow!("No password available"))
+            match password::get_password(&keyring_key) {
+                Ok(Some(pwd)) => Self::try_password_auth(&sess, user, &pwd),
+                _ => Err(anyhow!("No password available")),
             }
         } else {
             Err(anyhow!("No authentication method available"))
@@ -86,6 +122,7 @@ impl SshConnection {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn exec(&mut self, command: &str) -> Result<String> {
         let mut channel = self
             .session
@@ -107,86 +144,128 @@ impl SshConnection {
     }
 
     pub fn shell(&mut self) -> Result<()> {
+        use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+        use std::io::{Read, Write};
+
         let mut channel = self
             .session
             .channel_session()
             .context("failed to open SSH channel")?;
 
         channel
-            .request_pty("xterm-termite", None, None)
+            .request_pty("xterm-256color", None, None)
             .context("failed to request PTY")?;
 
         channel.shell().context("failed to start shell")?;
 
-        let mut stdin = std::io::stdin();
-        let stdout = Arc::new(Mutex::new(std::io::stdout()));
+        // Save terminal state and set up raw mode
+        disable_raw_mode().ok(); // Ensure we start clean
+        enable_raw_mode()?;
 
-        use std::io::{Read, Write};
+        let mut stdin = std::io::stdin();
+        let mut stdout = std::io::stdout();
 
         let mut channel_stdin = channel.stream(0);
         let mut channel_stdout = channel.stream(0);
         let mut channel_stderr = channel.stderr();
+        let stdin_fd = stdin.as_raw_fd();
+        let session_fd = self.session.as_raw_fd();
+        let mut stdin_closed = false;
+        let mut sent_eof = false;
+        let mut pending_input = Vec::new();
+        let mut stdin_buffer = [0u8; 8192];
+        let mut stdout_buffer = [0u8; 8192];
+        let mut stderr_buffer = [0u8; 8192];
 
-        let stdin_handle = std::thread::spawn(move || {
-            let mut buffer = [0u8; 8192];
+        self.session.set_blocking(false);
+        let shell_result = (|| -> Result<()> {
             loop {
-                match stdin.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if channel_stdin.write_all(&buffer[..n]).is_err() {
-                            break;
+                let mut progressed = false;
+
+                loop {
+                    match channel_stdout.read(&mut stdout_buffer) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            stdout
+                                .write_all(&stdout_buffer[..n])
+                                .context("failed to write SSH stdout")?;
+                            progressed = true;
                         }
+                        Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(err) => return Err(err).context("failed to read SSH stdout"),
                     }
-                    Err(_) => break,
+                }
+
+                loop {
+                    match channel_stderr.read(&mut stderr_buffer) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            stdout
+                                .write_all(&stderr_buffer[..n])
+                                .context("failed to write SSH stderr")?;
+                            progressed = true;
+                        }
+                        Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(err) => return Err(err).context("failed to read SSH stderr"),
+                    }
+                }
+
+                if !pending_input.is_empty() {
+                    match channel_stdin.write(&pending_input) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            pending_input.drain(..n);
+                            progressed = true;
+                        }
+                        Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(err) => return Err(err).context("failed to write SSH stdin"),
+                    }
+                } else if stdin_closed && !sent_eof {
+                    match channel.send_eof() {
+                        Ok(()) => {
+                            sent_eof = true;
+                            progressed = true;
+                        }
+                        // libssh2 reports EAGAIN as session error -37 when nonblocking I/O
+                        // needs the socket to become writable before sending EOF.
+                        Err(ref err)
+                            if matches!(err.code(), ssh2::ErrorCode::Session(code) if code == -37) => {}
+                        Err(err) => return Err(err).context("failed to send SSH EOF"),
+                    }
+                }
+
+                stdout.flush().context("failed to flush terminal output")?;
+
+                if channel.eof() {
+                    break;
+                }
+
+                let stdin_ready =
+                    poll_shell_fds(stdin_fd, session_fd, !stdin_closed, !pending_input.is_empty() || (stdin_closed && !sent_eof))?;
+
+                if stdin_ready {
+                    match stdin.read(&mut stdin_buffer) {
+                        Ok(0) => stdin_closed = true,
+                        Ok(n) => pending_input.extend_from_slice(&stdin_buffer[..n]),
+                        Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(err) => return Err(err).context("failed to read terminal input"),
+                    }
+                } else if !stdin_closed {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+
+                if !progressed && stdin_closed && sent_eof {
+                    std::thread::sleep(Duration::from_millis(5));
                 }
             }
-        });
 
-        let stdout_handle = {
-            let stdout = stdout.clone();
-            std::thread::spawn(move || {
-                let mut buffer = [0u8; 8192];
-                loop {
-                    match channel_stdout.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut out) = stdout.lock()
-                                && out.write_all(&buffer[..n]).is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            })
-        };
+            Ok(())
+        })();
 
-        let stderr_handle = {
-            let stdout = stdout.clone();
-            std::thread::spawn(move || {
-                let mut buffer = [0u8; 8192];
-                loop {
-                    match channel_stderr.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut out) = stdout.lock()
-                                && out.write_all(&buffer[..n]).is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            })
-        };
+        self.session.set_blocking(true);
+        disable_raw_mode()?;
 
-        stdin_handle.join().ok();
-        stdout_handle.join().ok();
-        stderr_handle.join().ok();
-
-        Ok(())
+        shell_result
     }
 
     pub fn upload(&self, local_path: &std::path::Path, remote_path: &str) -> Result<()> {
@@ -278,6 +357,7 @@ mod tests {
             password_from_keyring: session.has_stored_password,
             password: None,
             no_password: !session.has_stored_password && session.identity_file.is_none(),
+            session_name: Some(session.name.clone()),
         };
 
         assert!(
@@ -310,6 +390,7 @@ mod tests {
             password_from_keyring: session.has_stored_password,
             password: None,
             no_password: !session.has_stored_password && session.identity_file.is_none(),
+            session_name: Some(session.name.clone()),
         };
 
         assert!(
@@ -341,6 +422,7 @@ mod tests {
             password_from_keyring: session.has_stored_password,
             password: None,
             no_password: !session.has_stored_password && session.identity_file.is_none(),
+            session_name: Some(session.name.clone()),
         };
 
         assert!(
@@ -377,6 +459,7 @@ mod tests {
             password_from_keyring: session.has_stored_password,
             password: None,
             no_password: !session.has_stored_password && session.identity_file.is_none(),
+            session_name: Some(session.name.clone()),
         };
 
         assert!(
@@ -386,4 +469,5 @@ mod tests {
         assert!(!auth_config.no_password, "Should NOT be no_password mode");
         assert!(auth_config.identity_file.is_some());
     }
+
 }

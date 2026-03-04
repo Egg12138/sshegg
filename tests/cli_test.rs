@@ -266,7 +266,7 @@ fn password_flags_dont_interfere_with_scp() {
         ])
         .assert()
         .failure()
-        .stderr(contains("failed to connect"));
+        .stderr(contains("SSH handshake failed"));
 
     ssher_cmd(&store_path)
         .args(["remove", "--name", session_name])
@@ -508,10 +508,10 @@ fn password_flag_accepted_by_parser() {
     let output = result.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if !output.status.success() {
-        if stderr.contains("No such device or address") || stderr.contains("keyring") {
-            return;
-        }
+    if !output.status.success()
+        && (stderr.contains("No such device or address") || stderr.contains("keyring"))
+    {
+        return;
     }
 
     if output.status.success() {

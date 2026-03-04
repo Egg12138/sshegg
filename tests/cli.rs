@@ -170,9 +170,8 @@ fn scp_to_direction_generates_correct_command() {
         .assert()
         .success();
 
-    // Test scp with --direction to (default)
-    // This will fail because the host doesn't exist, but we can check the error message
-    // The command should be: ssh2 upload to /remote/file.txt
+    // Test scp with --direction to (default). The host is intentionally not running
+    // SSH, so the request should fail after the TCP connection/handshake attempt.
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -187,7 +186,7 @@ fn scp_to_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("failed to connect"));
+        .stderr(contains("SSH handshake failed"));
 }
 
 #[test]
@@ -207,8 +206,7 @@ fn scp_from_direction_generates_correct_command() {
         .assert()
         .success();
 
-    // Test scp with --direction from
-    // Command should be: ssh2 download from /remote/file.txt
+    // Test scp with --direction from against a non-SSH target.
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -223,7 +221,7 @@ fn scp_from_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("failed to connect"));
+        .stderr(contains("SSH handshake failed"));
 }
 
 #[test]
@@ -243,8 +241,7 @@ fn scp_recursive_includes_recursive_flag() {
         .assert()
         .success();
 
-    // Test scp with --recursive
-    // Command should use ssh2 backend (recursive flag is not used in basic upload)
+    // Test scp with --recursive against a non-SSH target.
     ssher_cmd(&store_path)
         .args([
             "scp",
@@ -258,7 +255,7 @@ fn scp_recursive_includes_recursive_flag() {
         ])
         .assert()
         .failure()
-        .stderr(contains("failed to connect"));
+        .stderr(contains("SSH handshake failed"));
 }
 
 #[test]
