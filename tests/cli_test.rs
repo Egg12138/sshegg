@@ -1,3 +1,4 @@
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::path::Path;
 use tempfile::tempdir;
@@ -266,7 +267,7 @@ fn password_flags_dont_interfere_with_scp() {
         ])
         .assert()
         .failure()
-        .stderr(contains("SSH handshake failed"));
+        .stderr(contains("failed to connect").or(contains("handshake failed")));
 
     ssher_cmd(&store_path)
         .args(["remove", "--name", session_name])

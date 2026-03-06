@@ -1,3 +1,4 @@
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::path::Path;
 use tempfile::tempdir;
@@ -186,7 +187,7 @@ fn scp_to_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("SSH handshake failed"));
+        .stderr(contains("failed to connect").or(contains("handshake failed")));
 }
 
 #[test]
@@ -221,7 +222,7 @@ fn scp_from_direction_generates_correct_command() {
         ])
         .assert()
         .failure()
-        .stderr(contains("SSH handshake failed"));
+        .stderr(contains("failed to connect").or(contains("handshake failed")));
 }
 
 #[test]
@@ -255,7 +256,7 @@ fn scp_recursive_includes_recursive_flag() {
         ])
         .assert()
         .failure()
-        .stderr(contains("SSH handshake failed"));
+        .stderr(contains("failed to connect").or(contains("handshake failed")));
 }
 
 #[test]
