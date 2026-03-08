@@ -450,6 +450,39 @@ install_binary() {
     fi
 }
 
+verify_installation() {
+    print_header "Verifying installation"
+
+    # Check that the binary exists and is executable
+    if [[ ! -x "${PREFIX}/se" ]]; then
+        print_error "Binary not found or not executable: ${PREFIX}/se"
+        exit 1
+    fi
+
+    # Get the installed version
+    INSTALLED_INFO=$("${PREFIX}/se" --version 2>/dev/null || echo "unknown")
+    INSTALLED_VERSION=$(echo "$INSTALLED_INFO" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+
+    if [[ "$INSTALLED_VERSION" == "unknown" ]]; then
+        print_error "Could not determine installed version"
+        print_step "Binary output: ${INSTALLED_INFO}"
+        exit 1
+    fi
+
+    print_success "Installed version: ${INSTALLED_VERSION}"
+
+    # If we downloaded a pre-built binary, verify version matches
+    if [[ -n "${LATEST_VERSION:-}" && "$LATEST_VERSION" != "unknown" ]]; then
+        EXPECTED_CLEAN="${LATEST_VERSION#v}"
+        if [[ "$INSTALLED_VERSION" != "$EXPECTED_CLEAN" ]]; then
+            print_error "Version mismatch! Expected ${EXPECTED_CLEAN}, got ${INSTALLED_VERSION}"
+            print_step "The installation may have failed. Try running with --force again."
+            exit 1
+        fi
+        print_success "Version verification passed"
+    fi
+}
+
 setup_config() {
     print_header "Setting up configuration"
 
@@ -589,6 +622,9 @@ main() {
     fi
 
     install_binary
+    echo ""
+
+    verify_installation
     echo ""
 
     setup_config
