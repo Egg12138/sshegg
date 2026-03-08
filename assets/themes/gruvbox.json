@@ -1,0 +1,22 @@
+{
+  "name": "Gruvbox",
+  "description": "A retro groove color scheme with warm oranges and browns",
+  "cli": {
+    "enabled": true,
+    "header": "Yellow",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Yellow",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Yellow",
+    "header": "Yellow",
+    "highlight": "Yellow",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Yellow",
+    "text": "White"
+  }
+}

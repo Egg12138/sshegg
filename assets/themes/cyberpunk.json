@@ -1,0 +1,22 @@
+{
+  "name": "Cyberpunk",
+  "description": "A neon futuristic theme with vibrant colors",
+  "cli": {
+    "enabled": true,
+    "header": "Magenta",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Magenta",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Magenta",
+    "header": "Cyan",
+    "highlight": "Magenta",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Cyan",
+    "text": "White"
+  }
+}

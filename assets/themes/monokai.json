@@ -1,0 +1,22 @@
+{
+  "name": "Monokai",
+  "description": "A classic dark theme with bright accent colors",
+  "cli": {
+    "enabled": true,
+    "header": "Yellow",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Magenta",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Yellow",
+    "header": "Magenta",
+    "highlight": "Yellow",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Magenta",
+    "text": "White"
+  }
+}

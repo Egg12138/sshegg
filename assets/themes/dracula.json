@@ -1,0 +1,22 @@
+{
+  "name": "Dracula",
+  "description": "A dark theme with purple and pink accents",
+  "cli": {
+    "enabled": true,
+    "header": "Magenta",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Magenta",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Magenta",
+    "header": "Cyan",
+    "highlight": "Magenta",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Magenta",
+    "text": "White"
+  }
+}

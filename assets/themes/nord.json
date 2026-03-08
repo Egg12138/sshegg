@@ -1,0 +1,22 @@
+{
+  "name": "Nord",
+  "description": "An arctic, north-bluish color palette",
+  "cli": {
+    "enabled": true,
+    "header": "Cyan",
+    "name": "Blue",
+    "target": "Green",
+    "port": "Blue",
+    "identity": "Cyan",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Cyan",
+    "header": "Blue",
+    "highlight": "Cyan",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Blue",
+    "text": "White"
+  }
+}

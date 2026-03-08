@@ -1,0 +1,22 @@
+{
+  "name": "Solarized",
+  "description": "Precision colors for reduced eye strain",
+  "cli": {
+    "enabled": true,
+    "header": "Yellow",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Yellow",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Yellow",
+    "header": "Yellow",
+    "highlight": "Cyan",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Yellow",
+    "text": "White"
+  }
+}
