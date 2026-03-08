@@ -195,9 +195,8 @@ download_binary() {
             INSTALLED_CLEAN="${INSTALLED_VERSION#v}"
             LATEST_CLEAN="${LATEST_VERSION#v}"
 
-            if [[ "$INSTALLED_CLEAN" == "$LATEST_CLEAN" && "$INSTALLED_HASH" != "unknown" ]]; then
-                # For pre-built binaries, we can't know the commit hash without downloading
-                # So if semantic versions match, we assume it's up to date
+            if [[ "$INSTALLED_CLEAN" == "$LATEST_CLEAN" ]]; then
+                # Versions match - already up to date
                 print_success "Already up to date (v${INSTALLED_CLEAN})"
                 echo ""
                 read -p "  Reinstall anyway? (y/N) " -n 1 -r
@@ -207,9 +206,11 @@ download_binary() {
                     return 2
                 fi
                 print_step "Forcing reinstall..."
-            elif [[ "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$LATEST_CLEAN" && "$INSTALLED_CLEAN" != "$LATEST_CLEAN" ]]; then
+            elif [[ "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$INSTALLED_CLEAN" && "$INSTALLED_CLEAN" != "$LATEST_CLEAN" ]]; then
+                # Installed is older than latest
                 print_step "Newer version available: ${LATEST_CLEAN} (currently: ${INSTALLED_CLEAN})"
-            elif [[ "$INSTALLED_CLEAN" != "$LATEST_CLEAN" && "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$INSTALLED_CLEAN" ]]; then
+            elif [[ "$INSTALLED_CLEAN" != "$LATEST_CLEAN" && "$(printf '%s\n' "$INSTALLED_CLEAN" "$LATEST_CLEAN" | sort -V | head -n1)" == "$LATEST_CLEAN" ]]; then
+                # Installed is newer than latest (e.g., dev build)
                 print_warning "Installed version (${INSTALLED_CLEAN}) is newer than latest release (${LATEST_CLEAN})"
             fi
         fi
