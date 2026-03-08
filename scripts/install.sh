@@ -315,19 +315,34 @@ check_dependencies() {
     fi
 }
 
+run_cargo_build() {
+    local extra_args=("$@")
+    if cargo "${extra_args[@]}" build --release 2>&1 | while IFS= read -r line; do
+        echo "    $line"
+    done; then
+        return 0
+    fi
+    return 1
+}
+
 build_binary() {
     print_header "Building binary"
     print_step "Building release binary..."
 
-    if cargo build --release 2>&1 | while IFS= read -r line; do
-        echo "    $line"
-    done; then
+    if run_cargo_build; then
         print_success "Build complete"
-    else
-        print_error "Build failed"
-        echo "Please check the error output above"
-        exit 1
+        return
     fi
+
+    print_step "Mirror registry missing dependencies; retrying with crates.io"
+    if run_cargo_build --config source.crates-io.replace-with=crates-io; then
+        print_success "Build complete (crates.io fallback)"
+        return
+    fi
+
+    print_error "Build failed"
+    echo "Please check the error output above"
+    exit 1
 }
 
 install_binary() {
@@ -361,6 +376,39 @@ install_binary() {
     else
         print_error "Failed to install binary"
         exit 1
+    fi
+}
+
+verify_installation() {
+    print_header "Verifying installation"
+
+    # Check that the binary exists and is executable
+    if [[ ! -x "${PREFIX}/se" ]]; then
+        print_error "Binary not found or not executable: ${PREFIX}/se"
+        exit 1
+    fi
+
+    # Get the installed version
+    INSTALLED_INFO=$("${PREFIX}/se" --version 2>/dev/null || echo "unknown")
+    INSTALLED_VERSION=$(echo "$INSTALLED_INFO" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+
+    if [[ "$INSTALLED_VERSION" == "unknown" ]]; then
+        print_error "Could not determine installed version"
+        print_step "Binary output: ${INSTALLED_INFO}"
+        exit 1
+    fi
+
+    print_success "Installed version: ${INSTALLED_VERSION}"
+
+    # If we downloaded a pre-built binary, verify version matches
+    if [[ -n "${LATEST_VERSION:-}" && "$LATEST_VERSION" != "unknown" ]]; then
+        EXPECTED_CLEAN="${LATEST_VERSION#v}"
+        if [[ "$INSTALLED_VERSION" != "$EXPECTED_CLEAN" ]]; then
+            print_error "Version mismatch! Expected ${EXPECTED_CLEAN}, got ${INSTALLED_VERSION}"
+            print_step "The installation may have failed. Try running with --force again."
+            exit 1
+        fi
+        print_success "Version verification passed"
     fi
 }
 
@@ -502,6 +550,9 @@ main() {
     fi
 
     install_binary
+    echo ""
+
+    verify_installation
     echo ""
 
     setup_config
