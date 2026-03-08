@@ -21,6 +21,7 @@ FORCE_INSTALL=false
 REPO="Egg12138/sshegg"
 VERSION="${VERSION:-latest}"
 BINARY_NAME_SHORT="se"
+LAST_BUILD_OUTPUT=""
 
 # Print functions
 print_header() {
@@ -41,6 +42,24 @@ print_error() {
 
 print_warning() {
     echo -e "  ${YELLOW}!${NC} $1"
+}
+
+configure_rust_toolchain_env() {
+    local user_home=""
+
+    user_home=$(eval echo "~$(id -un)" 2>/dev/null || true)
+
+    if [[ -n "$user_home" && -z "${RUSTUP_HOME:-}" && -d "${user_home}/.rustup" ]]; then
+        export RUSTUP_HOME="${user_home}/.rustup"
+    fi
+
+    if [[ -n "$user_home" && -z "${CARGO_HOME:-}" && -d "${user_home}/.cargo" ]]; then
+        export CARGO_HOME="${user_home}/.cargo"
+    fi
+
+    if [[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}/bin" && ":$PATH:" != *":${CARGO_HOME}/bin:"* ]]; then
+        export PATH="${CARGO_HOME}/bin:${PATH}"
+    fi
 }
 
 # Show help message
@@ -273,7 +292,7 @@ check_dependencies() {
 
     # Check for rust/cargo
     if command -v cargo &> /dev/null; then
-        CARGO_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2)
+        CARGO_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2 || true)
         if [[ -n "$CARGO_VERSION" ]]; then
             print_success "Rust toolchain found ($CARGO_VERSION)"
         else
@@ -319,15 +338,82 @@ build_binary() {
     print_header "Building binary"
     print_step "Building release binary..."
 
-    if cargo build --release 2>&1 | while IFS= read -r line; do
-        echo "    $line"
-    done; then
+    if run_cargo_build build --release; then
+        :
+    else
+        if should_retry_with_crates_io "$LAST_BUILD_OUTPUT"; then
+            print_warning "Mirror registry failed to resolve dependencies, retrying with crates.io..."
+            if run_cargo_build \
+                --config 'source.crates-io.replace-with="direct-crates-io"' \
+                --config 'source.direct-crates-io.registry="sparse+https://index.crates.io/"' \
+                build --release; then
+                :
+            else
+                print_error "Build failed"
+                echo "Please check the error output above"
+                exit 1
+            fi
+        else
+            print_error "Build failed"
+            echo "Please check the error output above"
+            exit 1
+        fi
+    fi
+
+    if normalize_source_build_artifact; then
         print_success "Build complete"
     else
-        print_error "Build failed"
-        echo "Please check the error output above"
+        print_error "Built binary not found in target/release (expected se or ssher)"
         exit 1
     fi
+}
+
+run_cargo_build() {
+    local output=""
+    local status=0
+
+    set +e
+    output=$(cargo "$@" 2>&1)
+    status=$?
+    set -e
+
+    LAST_BUILD_OUTPUT="$output"
+
+    if [[ -n "$output" ]]; then
+        while IFS= read -r line; do
+            echo "    $line"
+        done <<< "$output"
+    fi
+
+    return "$status"
+}
+
+normalize_source_build_artifact() {
+    if [[ -f target/release/se ]]; then
+        return 0
+    fi
+
+    if [[ -f target/release/ssher ]]; then
+        cp target/release/ssher target/release/se
+        chmod +x target/release/se
+        return 0
+    fi
+
+    return 1
+}
+
+should_retry_with_crates_io() {
+    local build_output="$1"
+
+    if [[ "$build_output" == *"replacing registry"* && "$build_output" == *"crates-io"* ]]; then
+        return 0
+    fi
+
+    if [[ "$build_output" == *"location searched:"* && "$build_output" == *"mirror"* && "$build_output" == *"index"* ]]; then
+        return 0
+    fi
+
+    return 1
 }
 
 install_binary() {
@@ -469,6 +555,7 @@ print_summary() {
 main() {
     echo -e "${GREEN}==> Installing ssher${NC}"
     echo ""
+    configure_rust_toolchain_env
 
     # Try to download pre-built binary first
     if [[ "$FORCE_SOURCE" != "true" ]]; then
