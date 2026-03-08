@@ -1,5 +1,6 @@
 mod output;
 mod theme;
+mod theme_cmd;
 
 use crate::ssh::{AuthConfig, SshConnection};
 
@@ -43,6 +44,7 @@ enum Commands {
     Go(GoArgs),
     Scp(ScpArgs),
     Completions(CompletionsArgs),
+    Theme(ThemeArgs),
 }
 
 #[derive(Args)]
@@ -174,6 +176,35 @@ struct CompletionsArgs {
     shell: Shell,
 }
 
+#[derive(Args)]
+struct ThemeArgs {
+    #[command(subcommand)]
+    command: ThemeCommand,
+}
+
+#[derive(Subcommand)]
+enum ThemeCommand {
+    /// List all available themes
+    List,
+    /// Apply a CLI theme
+    ApplyCli {
+        /// Theme name
+        name: String,
+    },
+    /// Apply a UI theme
+    ApplyUi {
+        /// Theme name
+        name: String,
+    },
+    /// Apply both CLI and UI themes
+    Apply {
+        /// Theme name
+        name: String,
+    },
+    /// Show currently active theme
+    Current,
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -200,6 +231,7 @@ pub fn run() -> Result<()> {
                 }
                 Some(Commands::Go(args)) => run_go(&store, args),
                 Some(Commands::Scp(args)) => run_scp(&store, args),
+                Some(Commands::Theme(args)) => handle_theme_command(args),
                 Some(Commands::Completions(_)) => unreachable!(),
             }
         }
@@ -682,4 +714,14 @@ fn now_epoch_seconds() -> i64 {
 fn generate_completions(shell: Shell) {
     let mut cmd = Cli::command();
     generate(shell, &mut cmd, "ssher", &mut io::stdout());
+}
+
+fn handle_theme_command(args: ThemeArgs) -> Result<()> {
+    match args.command {
+        ThemeCommand::List => theme_cmd::list_themes_cmd(),
+        ThemeCommand::ApplyCli { name } => theme_cmd::apply_cli_theme_cmd(&name),
+        ThemeCommand::ApplyUi { name } => theme_cmd::apply_ui_theme_cmd(&name),
+        ThemeCommand::Apply { name } => theme_cmd::apply_theme_cmd(&name),
+        ThemeCommand::Current => theme_cmd::current_theme_cmd(),
+    }
 }

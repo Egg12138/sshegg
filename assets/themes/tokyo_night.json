@@ -1,0 +1,22 @@
+{
+  "name": "Tokyo Night",
+  "description": "A Japanese dark theme with purple and blue tones",
+  "cli": {
+    "enabled": true,
+    "header": "Blue",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Blue",
+    "identity": "Magenta",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Blue",
+    "header": "Magenta",
+    "highlight": "Blue",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Blue",
+    "text": "White"
+  }
+}

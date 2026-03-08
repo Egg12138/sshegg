@@ -23,7 +23,7 @@ use std::env;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub use config::{UiConfig, load_ui_config};
+pub use config::{ThemeConfig, UiConfig, load_ui_config};
 
 struct Theme {
     logo: Color,

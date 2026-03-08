@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use directories::ProjectDirs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct UiConfig {
     pub logo: LogoConfig,
@@ -12,7 +12,7 @@ pub struct UiConfig {
     pub theme: ThemeConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LogoConfig {
     pub enabled: bool,
@@ -34,7 +34,7 @@ impl Default for LogoConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LayoutConfig {
     pub show_logo: bool,
@@ -66,7 +66,7 @@ impl Default for LayoutConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ThemeConfig {
     pub logo: String,

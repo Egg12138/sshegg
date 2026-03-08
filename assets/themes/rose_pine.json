@@ -1,0 +1,22 @@
+{
+  "name": "Rose Pine",
+  "description": "A soft theme with purple and pink tones",
+  "cli": {
+    "enabled": true,
+    "header": "Magenta",
+    "name": "Cyan",
+    "target": "Green",
+    "port": "Magenta",
+    "identity": "Blue",
+    "tags": "DarkGray"
+  },
+  "ui": {
+    "logo": "Magenta",
+    "header": "Magenta",
+    "highlight": "Magenta",
+    "border": "DarkGray",
+    "help": "Green",
+    "status": "Magenta",
+    "text": "White"
+  }
+}

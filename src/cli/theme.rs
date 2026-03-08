@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use directories::ProjectDirs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CliThemeConfig {
     pub enabled: bool,
