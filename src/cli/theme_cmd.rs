@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct ThemePreset {
     pub name: String,
@@ -15,31 +15,20 @@ pub struct ThemePreset {
     pub ui: ThemeConfig,
 }
 
-impl Default for ThemePreset {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            description: String::new(),
-            cli: CliThemeConfig::default(),
-            ui: ThemeConfig::default(),
-        }
-    }
-}
-
 /// Get the themes directory
 /// Checks assets/themes first, then system config directory
 pub fn get_themes_dir() -> Result<PathBuf> {
     // First check relative to the binary (assets/themes in the repo)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            // Check for assets/themes next to the binary
-            let repo_themes = parent
-                .parent()
-                .map(|p| p.join("assets/themes"))
-                .filter(|p| p.exists());
-            if let Some(path) = repo_themes {
-                return Ok(path);
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        // Check for assets/themes next to the binary
+        let repo_themes = parent
+            .parent()
+            .map(|p| p.join("assets/themes"))
+            .filter(|p| p.exists());
+        if let Some(path) = repo_themes {
+            return Ok(path);
         }
     }
 
@@ -204,34 +193,6 @@ pub fn apply_ui_theme(theme: &ThemeConfig) -> Result<()> {
         .with_context(|| format!("failed to write config to {}", ui_config_path.display()))?;
 
     Ok(())
-}
-
-/// Print available themes in a table format
-pub fn print_theme_list(themes: &[ThemePreset]) {
-    if themes.is_empty() {
-        println!("No themes found.");
-        return;
-    }
-
-    println!("\nAvailable themes:\n");
-
-    // Find the longest name for formatting
-    let max_name_len = themes.iter().map(|t| t.name.len()).max().unwrap_or(0);
-
-    for theme in themes {
-        println!(
-            "  {: <width$} - {}",
-            theme.name,
-            theme.description,
-            width = max_name_len
-        );
-    }
-
-    println!();
-    println!("Use 'ssher theme apply <name>' to apply a theme to both CLI and UI");
-    println!("Use 'ssher theme apply-cli <name>' to apply only to CLI");
-    println!("Use 'ssher theme apply-ui <name>' to apply only to UI");
-    println!();
 }
 
 /// Detect the currently active theme by reading config files
