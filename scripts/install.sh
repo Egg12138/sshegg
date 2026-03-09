@@ -23,6 +23,30 @@ VERSION="${VERSION:-latest}"
 BINARY_NAME_SHORT="se"
 LAST_BUILD_OUTPUT=""
 
+configure_rust_toolchain_env() {
+    local user_home="${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}"
+    if [[ -z "$user_home" ]]; then
+        user_home="${ORIGINAL_HOME:-${OLDHOME:-}}"
+    fi
+    if [[ -z "$user_home" ]]; then
+        local cargo_cmd
+        cargo_cmd="$(command -v cargo 2>/dev/null || true)"
+        if [[ "$cargo_cmd" == */.cargo/bin/cargo ]]; then
+            user_home="${cargo_cmd%/.cargo/bin/cargo}"
+        fi
+    fi
+
+    if [[ -n "$user_home" && -z "${RUSTUP_HOME:-}" && -d "${user_home}/.rustup" ]]; then
+        export RUSTUP_HOME="${user_home}/.rustup"
+    fi
+    if [[ -n "$user_home" && -z "${CARGO_HOME:-}" && -d "${user_home}/.cargo" ]]; then
+        export CARGO_HOME="${user_home}/.cargo"
+    fi
+    if [[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}/bin" && ":$PATH:" != *":${CARGO_HOME}/bin:"* ]]; then
+        export PATH="${CARGO_HOME}/bin:${PATH}"
+    fi
+}
+
 # Print functions
 print_header() {
     echo -e "${BLUE}==>${NC} $1"
@@ -404,13 +428,13 @@ run_cargo_build() {
 }
 
 normalize_source_build_artifact() {
-    if [[ -f target/release/se ]]; then
-        return 0
-    fi
-
     if [[ -f target/release/ssher ]]; then
         cp target/release/ssher target/release/se
         chmod +x target/release/se
+        return 0
+    fi
+
+    if [[ -f target/release/se ]]; then
         return 0
     fi
 
@@ -552,8 +576,9 @@ install_completions() {
     if [[ -d "${HOME}/.local/share/bash-completion/completions" ]] || command -v bash &> /dev/null; then
         COMPLETION_DIR="${HOME}/.local/share/bash-completion/completions"
         mkdir -p "$COMPLETION_DIR"
-        if [[ -f "scripts/completions/ssher.bash" ]]; then
-            cp scripts/completions/ssher.bash "${COMPLETION_DIR}/ssher"
+        if [[ -f "scripts/completions/se.bash" ]]; then
+            cp scripts/completions/se.bash "${COMPLETION_DIR}/se"
+            rm -f "${COMPLETION_DIR}/ssher"
             print_success "bash completions installed"
             INSTALLED_SOMETHING=true
         fi
@@ -563,9 +588,10 @@ install_completions() {
     if command -v zsh &> /dev/null || [[ "$CURRENT_SHELL" == "zsh" ]]; then
         ZSH_FUNCTIONS="${ZDOTDIR:-${HOME}}/.zfunc"
         mkdir -p "$ZSH_FUNCTIONS"
-        if [[ -f "scripts/completions/ssher.zsh" ]]; then
-            cp scripts/completions/ssher.zsh "${ZSH_FUNCTIONS}/_ssher"
-            print_success "zsh completions installed to ${ZSH_FUNCTIONS}/_ssher"
+        if [[ -f "scripts/completions/se.zsh" ]]; then
+            cp scripts/completions/se.zsh "${ZSH_FUNCTIONS}/_se"
+            rm -f "${ZSH_FUNCTIONS}/_ssher"
+            print_success "zsh completions installed to ${ZSH_FUNCTIONS}/_se"
             echo "    Add to ~/.zshrc: fpath=(\"${ZSH_FUNCTIONS}\" \$fpath)"
             INSTALLED_SOMETHING=true
         fi
@@ -575,8 +601,9 @@ install_completions() {
     if command -v fish &> /dev/null || [[ "$CURRENT_SHELL" == "fish" ]]; then
         FISH_COMPLETIONS="${HOME}/.config/fish/completions"
         mkdir -p "$FISH_COMPLETIONS"
-        if [[ -f "scripts/completions/ssher.fish" ]]; then
-            cp scripts/completions/ssher.fish "${FISH_COMPLETIONS}/"
+        if [[ -f "scripts/completions/se.fish" ]]; then
+            cp scripts/completions/se.fish "${FISH_COMPLETIONS}/se.fish"
+            rm -f "${FISH_COMPLETIONS}/ssher.fish"
             print_success "fish completions installed"
             INSTALLED_SOMETHING=true
         fi
@@ -603,6 +630,7 @@ print_summary() {
     fi
     echo "    2. Run: se --help"
     echo "    3. Launch TUI: se tui"
+    echo "    4. If this shell still resolves old command paths, run: hash -r"
     echo ""
 }
 

@@ -111,5 +111,29 @@ else
     exit 1
 fi
 
+VERSION_OUTPUT=$("$TEST_PREFIX/se" --version 2>/dev/null || true)
+if [[ "$VERSION_OUTPUT" == se* ]]; then
+    echo "  ✓ Installed binary identifies itself as 'se'"
+else
+    echo "  ✗ Installed binary version output is not 'se ...': $VERSION_OUTPUT"
+    exit 1
+fi
+
+# Test 9: Check completion file naming uses 'se'
+echo "Test 9: Checking completion file naming"
+if [[ -f "$TEST_HOME/.local/share/bash-completion/completions/se" ]]; then
+    echo "  ✓ Bash completion installed as 'se'"
+else
+    echo "  ✗ Bash completion not found at .../completions/se"
+    exit 1
+fi
+
+if [[ ! -f "$TEST_HOME/.local/share/bash-completion/completions/ssher" ]]; then
+    echo "  ✓ Legacy bash completion 'ssher' cleaned up"
+else
+    echo "  ✗ Legacy bash completion 'ssher' should not exist"
+    exit 1
+fi
+
 echo ""
 echo "==> All tests passed!"

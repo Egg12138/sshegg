@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "ssher",
+    name = "se",
     version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_HASH"), ")"),
     about = "Manage SSH sessions"
 )]
@@ -713,7 +713,7 @@ fn now_epoch_seconds() -> i64 {
 
 fn generate_completions(shell: Shell) {
     let mut cmd = Cli::command();
-    generate(shell, &mut cmd, "ssher", &mut io::stdout());
+    generate(shell, &mut cmd, "se", &mut io::stdout());
 }
 
 fn handle_theme_command(args: ThemeArgs) -> Result<()> {
