@@ -3,10 +3,12 @@
 
 use crate::password;
 use anyhow::{Context, Result, anyhow};
-use ssh2::Session as Ssh2Session;
+use ssh2::{KeyboardInteractivePrompt, Prompt, Session as Ssh2Session};
+use std::collections::HashSet;
+use std::io::IsTerminal;
 use std::net::TcpStream;
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub struct AuthConfig {
@@ -14,6 +16,7 @@ pub struct AuthConfig {
     pub password: Option<String>,
     pub password_from_keyring: bool,
     pub no_password: bool,
+    pub allow_manual_password_prompt: bool,
     pub session_name: Option<String>,
 }
 
@@ -56,6 +59,162 @@ fn poll_shell_fds(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct AuthMethodHints {
+    publickey: bool,
+    password: bool,
+    keyboard_interactive: bool,
+}
+
+impl AuthMethodHints {
+    fn permissive() -> Self {
+        Self {
+            publickey: true,
+            password: true,
+            keyboard_interactive: true,
+        }
+    }
+
+    fn from_server(methods: &str) -> Self {
+        let mut parsed = Self {
+            publickey: false,
+            password: false,
+            keyboard_interactive: false,
+        };
+
+        for method in methods.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+            match method {
+                "publickey" => parsed.publickey = true,
+                "password" => parsed.password = true,
+                "keyboard-interactive" => parsed.keyboard_interactive = true,
+                _ => {}
+            }
+        }
+
+        if parsed.publickey || parsed.password || parsed.keyboard_interactive {
+            parsed
+        } else {
+            Self::permissive()
+        }
+    }
+}
+
+struct StaticPasswordPrompter {
+    password: String,
+}
+
+impl StaticPasswordPrompter {
+    fn new(password: &str) -> Self {
+        Self {
+            password: password.to_string(),
+        }
+    }
+}
+
+impl KeyboardInteractivePrompt for StaticPasswordPrompter {
+    fn prompt<'a>(
+        &mut self,
+        _username: &str,
+        _instructions: &str,
+        prompts: &[Prompt<'a>],
+    ) -> Vec<String> {
+        prompts.iter().map(|_| self.password.clone()).collect()
+    }
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn expand_tilde_path(path: &str, home: Option<&Path>) -> PathBuf {
+    if path == "~" {
+        return home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(path));
+    }
+
+    if let Some(suffix) = path.strip_prefix("~/")
+        && let Some(home) = home
+    {
+        return home.join(suffix);
+    }
+
+    PathBuf::from(path)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, candidate: PathBuf) {
+    if seen.insert(candidate.clone()) {
+        paths.push(candidate);
+    }
+}
+
+fn discover_identity_files_in_dir(ssh_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    let preferred = [
+        "id_ed25519",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519_sk",
+        "id_rsa",
+        "id_dsa",
+        "id_xmss",
+    ];
+
+    for name in preferred {
+        let candidate = ssh_dir.join(name);
+        if candidate.is_file() {
+            push_unique_path(&mut candidates, &mut seen, candidate);
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(ssh_dir) {
+        let mut extra = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+
+            if file_name.starts_with("id_") && !file_name.ends_with(".pub") {
+                extra.push(path);
+            }
+        }
+
+        extra.sort();
+        for candidate in extra {
+            push_unique_path(&mut candidates, &mut seen, candidate);
+        }
+    }
+
+    candidates
+}
+
+fn collect_identity_candidates(session_identity: Option<&str>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    let home = home_dir();
+
+    if let Some(home) = home.as_deref() {
+        let ssh_dir = home.join(".ssh");
+        for candidate in discover_identity_files_in_dir(&ssh_dir) {
+            push_unique_path(&mut candidates, &mut seen, candidate);
+        }
+    }
+
+    if let Some(session_identity) = session_identity {
+        let identity = expand_tilde_path(session_identity, home.as_deref());
+        push_unique_path(&mut candidates, &mut seen, identity);
+    }
+
+    candidates
+}
+
 impl SshConnection {
     pub fn connect(host: &str, port: u16, user: &str, auth_config: &AuthConfig) -> Result<Self> {
         let tcp = TcpStream::connect(format!("{}:{}", host, port))
@@ -70,61 +229,200 @@ impl SshConnection {
             None => format!("{}@{}", user, host),
         };
 
-        let auth_result = if auth_config.no_password {
-            if let Some(identity) = &auth_config.identity_file {
-                Self::try_key_auth(&sess, user, identity)
-            } else {
-                Err(anyhow!("No authentication method available"))
-            }
-        } else if let Some(identity) = &auth_config.identity_file {
-            match Self::try_key_auth(&sess, user, identity) {
-                Ok(_) => Ok(()),
-                Err(_) => {
-                    if let Some(pwd) = &auth_config.password {
-                        Self::try_password_auth(&sess, user, pwd)
-                    } else if auth_config.password_from_keyring {
-                        match password::get_password(&keyring_key) {
-                            Ok(Some(pwd)) => Self::try_password_auth(&sess, user, &pwd),
-                            _ => Err(anyhow!("Authentication failed")),
-                        }
-                    } else {
-                        Err(anyhow!("Authentication failed"))
-                    }
-                }
-            }
-        } else if let Some(pwd) = &auth_config.password {
-            Self::try_password_auth(&sess, user, pwd)
-        } else if auth_config.password_from_keyring {
-            match password::get_password(&keyring_key) {
-                Ok(Some(pwd)) => Self::try_password_auth(&sess, user, &pwd),
-                _ => Err(anyhow!("No password available")),
-            }
-        } else {
-            Err(anyhow!("No authentication method available"))
-        };
+        let auth_result = Self::authenticate(&sess, host, user, auth_config, &keyring_key);
 
         auth_result.context("SSH authentication failed")?;
 
         Ok(Self { session: sess })
     }
 
-    fn try_key_auth(sess: &Ssh2Session, user: &str, identity_path: &str) -> Result<()> {
-        let path = Path::new(identity_path);
-        if !path.exists() {
-            return Err(anyhow!("Identity file does not exist: {}", identity_path));
+    fn authenticate(
+        sess: &Ssh2Session,
+        host: &str,
+        user: &str,
+        auth_config: &AuthConfig,
+        keyring_key: &str,
+    ) -> Result<()> {
+        let auth_methods = match sess.auth_methods(user) {
+            Ok(methods) => AuthMethodHints::from_server(methods),
+            Err(_) => AuthMethodHints::permissive(),
+        };
+        let mut attempts = Vec::new();
+
+        if auth_methods.publickey {
+            match Self::try_agent_auth(sess, user) {
+                Ok(()) => return Ok(()),
+                Err(err) => attempts.push(format!("SSH agent auth failed: {err:#}")),
+            }
+
+            let identity_candidates =
+                collect_identity_candidates(auth_config.identity_file.as_deref());
+            if identity_candidates.is_empty() {
+                attempts.push("no local identity files discovered in ~/.ssh".to_string());
+            }
+
+            for identity in identity_candidates {
+                match Self::try_key_auth(sess, user, &identity) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => attempts.push(format!(
+                        "key auth failed for '{}': {err:#}",
+                        identity.display()
+                    )),
+                }
+            }
+        } else {
+            attempts.push("server does not advertise publickey authentication".to_string());
         }
 
-        sess.userauth_pubkey_file(user, None, path, None)
+        if !auth_config.no_password {
+            if let Some(password) = auth_config.password.as_deref() {
+                match Self::try_password_auth(sess, user, password, &auth_methods) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => attempts.push(format!("explicit password auth failed: {err:#}")),
+                }
+            }
+
+            if auth_config.password_from_keyring {
+                match password::get_password(keyring_key) {
+                    Ok(Some(password)) => {
+                        match Self::try_password_auth(sess, user, &password, &auth_methods) {
+                            Ok(()) => return Ok(()),
+                            Err(err) => {
+                                attempts.push(format!("keyring password auth failed: {err:#}"))
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        attempts.push("no keyring password found for this session".to_string())
+                    }
+                    Err(err) => attempts.push(format!("failed to read keyring password: {err:#}")),
+                }
+            }
+
+            if auth_config.allow_manual_password_prompt {
+                match Self::prompt_for_password(host, user)? {
+                    Some(password) => {
+                        match Self::try_password_auth(sess, user, &password, &auth_methods) {
+                            Ok(()) => return Ok(()),
+                            Err(err) => {
+                                attempts.push(format!("manual password auth failed: {err:#}"))
+                            }
+                        }
+                    }
+                    None => attempts.push(
+                        "manual password prompt skipped (non-interactive or empty)".to_string(),
+                    ),
+                }
+            }
+        } else {
+            attempts.push("password authentication disabled by configuration".to_string());
+        }
+
+        let summary = if attempts.is_empty() {
+            "no auth attempts were performed".to_string()
+        } else {
+            attempts.join(" | ")
+        };
+
+        Err(anyhow!("No authentication method succeeded: {summary}"))
+    }
+
+    fn try_agent_auth(sess: &Ssh2Session, user: &str) -> Result<()> {
+        let mut agent = sess.agent().context("failed to access SSH agent")?;
+        agent.connect().context("failed to connect to SSH agent")?;
+        agent
+            .list_identities()
+            .context("failed to list SSH agent identities")?;
+        let identities = agent
+            .identities()
+            .context("failed to read SSH agent identities")?;
+
+        if identities.is_empty() {
+            let _ = agent.disconnect();
+            return Err(anyhow!("no identities available in SSH agent"));
+        }
+
+        let mut failures = Vec::new();
+        for identity in identities {
+            let label = match identity.comment().trim() {
+                "" => "<unnamed identity>".to_string(),
+                comment => comment.to_string(),
+            };
+            match agent.userauth(user, &identity) {
+                Ok(()) => {
+                    let _ = agent.disconnect();
+                    return Ok(());
+                }
+                Err(err) => failures.push(format!("{label}: {err}")),
+            }
+        }
+
+        let _ = agent.disconnect();
+        Err(anyhow!(
+            "all SSH agent identities failed ({})",
+            failures.join("; ")
+        ))
+    }
+
+    fn try_key_auth(sess: &Ssh2Session, user: &str, identity_path: &Path) -> Result<()> {
+        if !identity_path.is_file() {
+            return Err(anyhow!(
+                "identity file does not exist: {}",
+                identity_path.display()
+            ));
+        }
+
+        sess.userauth_pubkey_file(user, None, identity_path, None)
             .context("key authentication failed")?;
 
         Ok(())
     }
 
-    fn try_password_auth(sess: &Ssh2Session, user: &str, password: &str) -> Result<()> {
-        sess.userauth_password(user, password)
-            .context("password authentication failed")?;
+    fn try_password_auth(
+        sess: &Ssh2Session,
+        user: &str,
+        password: &str,
+        auth_methods: &AuthMethodHints,
+    ) -> Result<()> {
+        let mut errors = Vec::new();
 
-        Ok(())
+        if auth_methods.password {
+            match sess.userauth_password(user, password) {
+                Ok(()) => return Ok(()),
+                Err(err) => errors.push(format!("password method failed: {err}")),
+            }
+        }
+
+        if auth_methods.keyboard_interactive {
+            let mut prompter = StaticPasswordPrompter::new(password);
+            match sess.userauth_keyboard_interactive(user, &mut prompter) {
+                Ok(()) => return Ok(()),
+                Err(err) => errors.push(format!("keyboard-interactive method failed: {err}")),
+            }
+        }
+
+        if errors.is_empty() {
+            return Err(anyhow!(
+                "server does not advertise password or keyboard-interactive authentication"
+            ));
+        }
+
+        Err(anyhow!(errors.join("; ")))
+    }
+
+    fn prompt_for_password(host: &str, user: &str) -> Result<Option<String>> {
+        if !std::io::stdin().is_terminal() {
+            return Ok(None);
+        }
+
+        let prompt = format!("Password for {}@{}: ", user, host);
+        let password =
+            rpassword::prompt_password(prompt).context("failed to read password from terminal")?;
+        if password.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(password))
+        }
     }
 
     #[allow(dead_code)]
@@ -341,141 +639,54 @@ impl SshConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Session;
+    use tempfile::tempdir;
 
     #[test]
-    fn auth_config_from_session_with_stored_password() {
-        // Verify that a session with has_stored_password=true triggers keyring lookup
-        let session = Session {
-            name: "test".to_string(),
-            host: "example.com".to_string(),
-            user: "testuser".to_string(),
-            port: 22,
-            identity_file: None,
-            tags: vec![],
-            last_connected_at: None,
-            has_stored_password: true,
-        };
-
-        // Simulate what run_ssh() does
-        let auth_config = AuthConfig {
-            identity_file: session
-                .identity_file
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            password_from_keyring: session.has_stored_password,
-            password: None,
-            no_password: !session.has_stored_password && session.identity_file.is_none(),
-            session_name: Some(session.name.clone()),
-        };
-
-        assert!(
-            auth_config.password_from_keyring,
-            "Should attempt keyring lookup"
-        );
-        assert!(!auth_config.no_password, "Should not be no_password mode");
-        assert!(auth_config.identity_file.is_none());
+    fn auth_method_hints_parse_known_methods() {
+        let hints = AuthMethodHints::from_server("publickey,password");
+        assert!(hints.publickey);
+        assert!(hints.password);
+        assert!(!hints.keyboard_interactive);
     }
 
     #[test]
-    fn auth_config_from_session_without_stored_password() {
-        // Verify that a session without stored password does NOT trigger keyring lookup
-        let session = Session {
-            name: "test".to_string(),
-            host: "example.com".to_string(),
-            user: "testuser".to_string(),
-            port: 22,
-            identity_file: None,
-            tags: vec![],
-            last_connected_at: None,
-            has_stored_password: false,
-        };
-
-        let auth_config = AuthConfig {
-            identity_file: session
-                .identity_file
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            password_from_keyring: session.has_stored_password,
-            password: None,
-            no_password: !session.has_stored_password && session.identity_file.is_none(),
-            session_name: Some(session.name.clone()),
-        };
-
-        assert!(
-            !auth_config.password_from_keyring,
-            "Should NOT attempt keyring lookup"
-        );
-        assert!(auth_config.no_password, "Should be no_password mode");
+    fn auth_method_hints_empty_input_is_permissive() {
+        let hints = AuthMethodHints::from_server("");
+        assert!(hints.publickey);
+        assert!(hints.password);
+        assert!(hints.keyboard_interactive);
     }
 
     #[test]
-    fn auth_config_from_session_with_identity_file() {
-        // Verify that a session with identity file sets no_password=false
-        let session = Session {
-            name: "test".to_string(),
-            host: "example.com".to_string(),
-            user: "testuser".to_string(),
-            port: 22,
-            identity_file: Some(std::path::PathBuf::from("/home/user/.ssh/id_rsa")),
-            tags: vec![],
-            last_connected_at: None,
-            has_stored_password: false,
-        };
-
-        let auth_config = AuthConfig {
-            identity_file: session
-                .identity_file
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            password_from_keyring: session.has_stored_password,
-            password: None,
-            no_password: !session.has_stored_password && session.identity_file.is_none(),
-            session_name: Some(session.name.clone()),
-        };
-
-        assert!(
-            !auth_config.password_from_keyring,
-            "Should NOT attempt keyring lookup"
+    fn expand_tilde_path_uses_home_when_available() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            expand_tilde_path("~/id_ed25519", Some(home)),
+            PathBuf::from("/home/tester/id_ed25519")
         );
-        assert!(
-            !auth_config.no_password,
-            "Should NOT be no_password mode (has identity file)"
+        assert_eq!(
+            expand_tilde_path("~", Some(home)),
+            PathBuf::from("/home/tester")
         );
-        assert!(auth_config.identity_file.is_some());
     }
 
     #[test]
-    fn auth_config_from_session_with_both_auth_methods() {
-        // Verify that a session with both identity file and stored password
-        // will attempt keyring lookup as fallback
-        let session = Session {
-            name: "test".to_string(),
-            host: "example.com".to_string(),
-            user: "testuser".to_string(),
-            port: 22,
-            identity_file: Some(std::path::PathBuf::from("/home/user/.ssh/id_rsa")),
-            tags: vec![],
-            last_connected_at: None,
-            has_stored_password: true,
-        };
+    fn discover_identity_files_ignores_public_keys_and_prefers_standard_order() {
+        let dir = tempdir().unwrap();
+        let ssh_dir = dir.path().join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
 
-        let auth_config = AuthConfig {
-            identity_file: session
-                .identity_file
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            password_from_keyring: session.has_stored_password,
-            password: None,
-            no_password: !session.has_stored_password && session.identity_file.is_none(),
-            session_name: Some(session.name.clone()),
-        };
+        std::fs::write(ssh_dir.join("id_custom"), "").unwrap();
+        std::fs::write(ssh_dir.join("id_rsa"), "").unwrap();
+        std::fs::write(ssh_dir.join("id_ed25519.pub"), "").unwrap();
+        std::fs::write(ssh_dir.join("config"), "").unwrap();
+        std::fs::write(ssh_dir.join("id_ecdsa"), "").unwrap();
 
-        assert!(
-            auth_config.password_from_keyring,
-            "Should attempt keyring lookup as fallback"
-        );
-        assert!(!auth_config.no_password, "Should NOT be no_password mode");
-        assert!(auth_config.identity_file.is_some());
+        let identities = discover_identity_files_in_dir(&ssh_dir);
+
+        assert_eq!(identities[0], ssh_dir.join("id_ecdsa"));
+        assert_eq!(identities[1], ssh_dir.join("id_rsa"));
+        assert_eq!(identities[2], ssh_dir.join("id_custom"));
+        assert_eq!(identities.len(), 3);
     }
 }

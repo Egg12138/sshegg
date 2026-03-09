@@ -634,17 +634,22 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn run_ssh(session: &Session) -> Result<()> {
-    let auth_config = AuthConfig {
+fn auth_config_for_session(session: &Session) -> AuthConfig {
+    AuthConfig {
         identity_file: session
             .identity_file
             .as_ref()
             .map(|p| p.display().to_string()),
         password_from_keyring: session.has_stored_password,
         password: None,
-        no_password: !session.has_stored_password && session.identity_file.is_none(),
+        no_password: false,
+        allow_manual_password_prompt: true,
         session_name: Some(session.name.clone()),
-    };
+    }
+}
+
+fn run_ssh(session: &Session) -> Result<()> {
+    let auth_config = auth_config_for_session(session);
 
     let mut connection =
         SshConnection::connect(&session.host, session.port, &session.user, &auth_config)?;
@@ -673,16 +678,7 @@ fn run_scp(store: &JsonFileStore, args: ScpArgs) -> Result<()> {
         .find(|session| session.name == args.name)
         .ok_or_else(|| anyhow!("session '{}' not found", args.name))?;
 
-    let auth_config = AuthConfig {
-        identity_file: session
-            .identity_file
-            .as_ref()
-            .map(|p| p.display().to_string()),
-        password_from_keyring: session.has_stored_password,
-        password: None,
-        no_password: !session.has_stored_password && session.identity_file.is_none(),
-        session_name: Some(session.name.clone()),
-    };
+    let auth_config = auth_config_for_session(&session);
 
     let connection =
         SshConnection::connect(&session.host, session.port, &session.user, &auth_config)?;
