@@ -21,6 +21,7 @@ FORCE_INSTALL=false
 REPO="Egg12138/sshegg"
 VERSION="${VERSION:-latest}"
 BINARY_NAME_SHORT="se"
+LAST_BUILD_OUTPUT=""
 
 # Print functions
 print_header() {
@@ -41,6 +42,24 @@ print_error() {
 
 print_warning() {
     echo -e "  ${YELLOW}!${NC} $1"
+}
+
+configure_rust_toolchain_env() {
+    local user_home=""
+
+    user_home=$(eval echo "~$(id -un)" 2>/dev/null || true)
+
+    if [[ -n "$user_home" && -z "${RUSTUP_HOME:-}" && -d "${user_home}/.rustup" ]]; then
+        export RUSTUP_HOME="${user_home}/.rustup"
+    fi
+
+    if [[ -n "$user_home" && -z "${CARGO_HOME:-}" && -d "${user_home}/.cargo" ]]; then
+        export CARGO_HOME="${user_home}/.cargo"
+    fi
+
+    if [[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}/bin" && ":$PATH:" != *":${CARGO_HOME}/bin:"* ]]; then
+        export PATH="${CARGO_HOME}/bin:${PATH}"
+    fi
 }
 
 # Show help message
@@ -71,40 +90,41 @@ ${BLUE}After installation:${NC}
 EOF
 }
 
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        --prefix)
-            PREFIX="$2"
-            shift 2
-            ;;
-        --from-source)
-            FORCE_SOURCE=true
-            shift
-            ;;
-        --version)
-            VERSION="$2"
-            shift 2
-            ;;
-        --no-completions)
-            INSTALL_COMPLETIONS=false
-            shift
-            ;;
-        --force)
-            FORCE_INSTALL=true
-            shift
-            ;;
-        *)
-            print_error "Unknown option: $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
-    esac
-done
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --prefix)
+                PREFIX="$2"
+                shift 2
+                ;;
+            --from-source)
+                FORCE_SOURCE=true
+                shift
+                ;;
+            --version)
+                VERSION="$2"
+                shift 2
+                ;;
+            --no-completions)
+                INSTALL_COMPLETIONS=false
+                shift
+                ;;
+            --force)
+                FORCE_INSTALL=true
+                shift
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
+}
 
 # Detect platform and return appropriate binary name
 get_platform() {
@@ -226,12 +246,7 @@ download_binary() {
     if [[ "$LOCAL_BINARY_NAME" == *"-windows-"* ]]; then
         BINARY_FILE="se.exe"
         ARCHIVE="${TEMP_DIR}/se.zip"
-        if command -v curl &> /dev/null; then
-            curl -fsSL "$DOWNLOAD_URL.zip" -o "$ARCHIVE"
-        elif command -v wget &> /dev/null; then
-            wget -q "$DOWNLOAD_URL.zip" -O "$ARCHIVE"
-        else
-            print_error "Neither curl nor wget available"
+        if ! download_archive "$DOWNLOAD_URL.zip" "$ARCHIVE"; then
             rm -rf "$TEMP_DIR"
             return 1
         fi
@@ -239,12 +254,7 @@ download_binary() {
     else
         BINARY_FILE="se"
         ARCHIVE="${TEMP_DIR}/se.tar.gz"
-        if command -v curl &> /dev/null; then
-            curl -fsSL "$DOWNLOAD_URL.tar.gz" -o "$ARCHIVE"
-        elif command -v wget &> /dev/null; then
-            wget -q "$DOWNLOAD_URL.tar.gz" -O "$ARCHIVE"
-        else
-            print_error "Neither curl nor wget available"
+        if ! download_archive "$DOWNLOAD_URL.tar.gz" "$ARCHIVE"; then
             rm -rf "$TEMP_DIR"
             return 1
         fi
@@ -268,12 +278,36 @@ download_binary() {
     return 0
 }
 
+download_archive() {
+    local url="$1"
+    local archive_path="$2"
+
+    if command -v curl &> /dev/null; then
+        if curl -fsSL "$url" -o "$archive_path"; then
+            return 0
+        fi
+        print_warning "Failed to download pre-built archive from ${url}"
+        return 1
+    fi
+
+    if command -v wget &> /dev/null; then
+        if wget -q "$url" -O "$archive_path"; then
+            return 0
+        fi
+        print_warning "Failed to download pre-built archive from ${url}"
+        return 1
+    fi
+
+    print_error "Neither curl nor wget available"
+    return 1
+}
+
 check_dependencies() {
     print_header "Checking dependencies"
 
     # Check for rust/cargo
     if command -v cargo &> /dev/null; then
-        CARGO_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2)
+        CARGO_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2 || true)
         if [[ -n "$CARGO_VERSION" ]]; then
             print_success "Rust toolchain found ($CARGO_VERSION)"
         else
@@ -315,34 +349,93 @@ check_dependencies() {
     fi
 }
 
-run_cargo_build() {
-    local extra_args=("$@")
-    if cargo "${extra_args[@]}" build --release 2>&1 | while IFS= read -r line; do
-        echo "    $line"
-    done; then
-        return 0
-    fi
-    return 1
-}
-
 build_binary() {
     print_header "Building binary"
     print_step "Building release binary..."
 
-    if run_cargo_build; then
+    if run_cargo_build build --release; then
+        :
+    else
+        if should_retry_with_crates_io "$LAST_BUILD_OUTPUT"; then
+            print_warning "Mirror registry failed to resolve dependencies, retrying with crates.io..."
+            if run_cargo_build \
+                --config 'source.crates-io.replace-with="direct-crates-io"' \
+                --config 'source.direct-crates-io.registry="sparse+https://index.crates.io/"' \
+                build --release; then
+                :
+            else
+                print_error "Build failed"
+                echo "Please check the error output above"
+                exit 1
+            fi
+        else
+            print_error "Build failed"
+            echo "Please check the error output above"
+            exit 1
+        fi
+    fi
+
+    if normalize_source_build_artifact; then
         print_success "Build complete"
-        return
+    else
+        print_error "Built binary not found in target/release (expected se or ssher)"
+        exit 1
+    fi
+}
+
+run_cargo_build() {
+    local output=""
+    local status=0
+
+    set +e
+    output=$(cargo "$@" 2>&1)
+    status=$?
+    set -e
+
+    LAST_BUILD_OUTPUT="$output"
+
+    if [[ -n "$output" ]]; then
+        while IFS= read -r line; do
+            echo "    $line"
+        done <<< "$output"
     fi
 
-    print_step "Mirror registry missing dependencies; retrying with crates.io"
-    if run_cargo_build --config source.crates-io.replace-with=crates-io; then
-        print_success "Build complete (crates.io fallback)"
-        return
+    return "$status"
+}
+
+normalize_source_build_artifact() {
+    if [[ -f target/release/se ]]; then
+        return 0
     fi
 
-    print_error "Build failed"
-    echo "Please check the error output above"
-    exit 1
+    if [[ -f target/release/ssher ]]; then
+        cp target/release/ssher target/release/se
+        chmod +x target/release/se
+        return 0
+    fi
+
+    return 1
+}
+
+should_retry_with_crates_io() {
+    local build_output="$1"
+
+    if [[ "$build_output" == *"replacing registry"* && "$build_output" == *"crates-io"* ]]; then
+        return 0
+    fi
+
+    if [[ "$build_output" == *"source.crates-io.replace-with"* ]]; then
+        return 0
+    fi
+
+    if printf '%s\n' "$build_output" | grep -Eq 'failed to select a version for the requirement|no matching package named'; then
+        if printf '%s\n' "$build_output" | grep -Eq 'location searched:[[:space:]]+' \
+            && ! printf '%s\n' "$build_output" | grep -Eq 'location searched:.*(crates\.io|index\.crates\.io|direct-crates-io)'; then
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 install_binary() {
@@ -515,8 +608,11 @@ print_summary() {
 
 # Main execution
 main() {
+    parse_args "$@"
+
     echo -e "${GREEN}==> Installing ssher${NC}"
     echo ""
+    configure_rust_toolchain_env
 
     # Try to download pre-built binary first
     if [[ "$FORCE_SOURCE" != "true" ]]; then
@@ -564,4 +660,6 @@ main() {
     print_summary
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
