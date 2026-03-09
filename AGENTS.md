@@ -4,6 +4,8 @@
 
 * publish release on github, managed by CLI `gh`
 * DO NOT publish to crate.io
+* we alwasy wanna my project binary to be installed as `se`, just like `rg` for `ripgrep`
+installation scripts should be correct for naming
 
 ## Project Structure & Module Organization
 Keep the Rust CLI’s entry point under `src/main.rs`, with reusable logic moving into `src/cli/`, `src/store/`, and `src/ui/` modules. Use `src/model.rs` (or `src/model/mod.rs`) for session data definitions, and keep the TUI implementation separate from the plain CLI helpers so headless commands can run without the UI. Any assets (templates, static text, config samples) belong under `assets/` or `docs/`. For configuration such as the session store path, lean on `~/.config/ssher/sessions.json` by default and document overrides in `README.md`.
