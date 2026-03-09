@@ -90,40 +90,41 @@ ${BLUE}After installation:${NC}
 EOF
 }
 
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        --prefix)
-            PREFIX="$2"
-            shift 2
-            ;;
-        --from-source)
-            FORCE_SOURCE=true
-            shift
-            ;;
-        --version)
-            VERSION="$2"
-            shift 2
-            ;;
-        --no-completions)
-            INSTALL_COMPLETIONS=false
-            shift
-            ;;
-        --force)
-            FORCE_INSTALL=true
-            shift
-            ;;
-        *)
-            print_error "Unknown option: $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
-    esac
-done
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --prefix)
+                PREFIX="$2"
+                shift 2
+                ;;
+            --from-source)
+                FORCE_SOURCE=true
+                shift
+                ;;
+            --version)
+                VERSION="$2"
+                shift 2
+                ;;
+            --no-completions)
+                INSTALL_COMPLETIONS=false
+                shift
+                ;;
+            --force)
+                FORCE_INSTALL=true
+                shift
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
+}
 
 # Detect platform and return appropriate binary name
 get_platform() {
@@ -245,12 +246,7 @@ download_binary() {
     if [[ "$LOCAL_BINARY_NAME" == *"-windows-"* ]]; then
         BINARY_FILE="se.exe"
         ARCHIVE="${TEMP_DIR}/se.zip"
-        if command -v curl &> /dev/null; then
-            curl -fsSL "$DOWNLOAD_URL.zip" -o "$ARCHIVE"
-        elif command -v wget &> /dev/null; then
-            wget -q "$DOWNLOAD_URL.zip" -O "$ARCHIVE"
-        else
-            print_error "Neither curl nor wget available"
+        if ! download_archive "$DOWNLOAD_URL.zip" "$ARCHIVE"; then
             rm -rf "$TEMP_DIR"
             return 1
         fi
@@ -258,12 +254,7 @@ download_binary() {
     else
         BINARY_FILE="se"
         ARCHIVE="${TEMP_DIR}/se.tar.gz"
-        if command -v curl &> /dev/null; then
-            curl -fsSL "$DOWNLOAD_URL.tar.gz" -o "$ARCHIVE"
-        elif command -v wget &> /dev/null; then
-            wget -q "$DOWNLOAD_URL.tar.gz" -O "$ARCHIVE"
-        else
-            print_error "Neither curl nor wget available"
+        if ! download_archive "$DOWNLOAD_URL.tar.gz" "$ARCHIVE"; then
             rm -rf "$TEMP_DIR"
             return 1
         fi
@@ -285,6 +276,30 @@ download_binary() {
 
     print_success "Binary downloaded successfully"
     return 0
+}
+
+download_archive() {
+    local url="$1"
+    local archive_path="$2"
+
+    if command -v curl &> /dev/null; then
+        if curl -fsSL "$url" -o "$archive_path"; then
+            return 0
+        fi
+        print_warning "Failed to download pre-built archive from ${url}"
+        return 1
+    fi
+
+    if command -v wget &> /dev/null; then
+        if wget -q "$url" -O "$archive_path"; then
+            return 0
+        fi
+        print_warning "Failed to download pre-built archive from ${url}"
+        return 1
+    fi
+
+    print_error "Neither curl nor wget available"
+    return 1
 }
 
 check_dependencies() {
@@ -409,8 +424,15 @@ should_retry_with_crates_io() {
         return 0
     fi
 
-    if [[ "$build_output" == *"location searched:"* && "$build_output" == *"mirror"* && "$build_output" == *"index"* ]]; then
+    if [[ "$build_output" == *"source.crates-io.replace-with"* ]]; then
         return 0
+    fi
+
+    if printf '%s\n' "$build_output" | grep -Eq 'failed to select a version for the requirement|no matching package named'; then
+        if printf '%s\n' "$build_output" | grep -Eq 'location searched:[[:space:]]+' \
+            && ! printf '%s\n' "$build_output" | grep -Eq 'location searched:.*(crates\.io|index\.crates\.io|direct-crates-io)'; then
+            return 0
+        fi
     fi
 
     return 1
@@ -586,6 +608,8 @@ print_summary() {
 
 # Main execution
 main() {
+    parse_args "$@"
+
     echo -e "${GREEN}==> Installing ssher${NC}"
     echo ""
     configure_rust_toolchain_env
@@ -636,4 +660,6 @@ main() {
     print_summary
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
