@@ -135,5 +135,21 @@ else
     exit 1
 fi
 
+# Test 10: Check legacy command compatibility binary
+echo "Test 10: Checking legacy 'ssher' compatibility command"
+if [[ -x "$TEST_PREFIX/ssher" ]]; then
+    echo "  ✓ Legacy compatibility command exists at $TEST_PREFIX/ssher"
+else
+    echo "  ✗ Legacy compatibility command missing at $TEST_PREFIX/ssher"
+    exit 1
+fi
+
+if "$TEST_PREFIX/ssher" --help > /dev/null 2>&1; then
+    echo "  ✓ Legacy compatibility command runs successfully"
+else
+    echo "  ✗ Legacy compatibility command failed to run"
+    exit 1
+fi
+
 echo ""
 echo "==> All tests passed!"

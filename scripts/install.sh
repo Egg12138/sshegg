@@ -485,7 +485,7 @@ install_binary() {
         exit 1
     fi
 
-    # Copy binary
+    # Copy primary binary
     print_step "Installing binary..."
     BINARY_PATH="${PREFIX}/se"
     if cp target/release/se "$BINARY_PATH" && chmod +x "$BINARY_PATH"; then
@@ -493,6 +493,18 @@ install_binary() {
     else
         print_error "Failed to install binary"
         exit 1
+    fi
+
+    # Backward compatibility: provide legacy command name for old aliases/scripts.
+    LEGACY_PATH="${PREFIX}/ssher"
+    print_step "Installing legacy compatibility command..."
+    rm -f "$LEGACY_PATH"
+    if ln -s "se" "$LEGACY_PATH" 2>/dev/null; then
+        print_success "Legacy command installed: ${LEGACY_PATH} -> se"
+    elif cp "$BINARY_PATH" "$LEGACY_PATH" && chmod +x "$LEGACY_PATH"; then
+        print_success "Legacy command installed at ${LEGACY_PATH}"
+    else
+        print_warning "Could not install legacy command ${LEGACY_PATH}"
     fi
 }
 
@@ -619,6 +631,7 @@ print_summary() {
     echo -e "${GREEN}==> Installation complete!${NC}"
     echo ""
     echo "  ${BLUE}Binary:${NC}        ${PREFIX}/se"
+    echo "  ${BLUE}Legacy:${NC}        ${PREFIX}/ssher -> se (compat)"
     echo "  ${BLUE}Config:${NC}        ${HOME}/.config/ssher/"
     echo ""
     echo "  ${BLUE}Next steps:${NC}"
