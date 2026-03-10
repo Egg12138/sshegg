@@ -20,7 +20,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use std::env;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -55,7 +55,7 @@ const HELP_PANEL_LINES: &[&str] = &[
     "Ctrl-d / Ctrl-u  Page down/up",
     "j / k / ↑ / ↓  Move selection",
     "gg / G        Jump top or bottom",
-    "Esc           Close help or cancel",
+    "Esc           Close help, cancel, or dismiss error details",
 ];
 
 impl Theme {
@@ -113,9 +113,16 @@ fn run_app<B: ratatui::backend::Backend>(
 
         if event::poll(Duration::from_millis(200))?
             && let Event::Key(key) = event::read()?
-            && let Some(selection) = handle_key(app, store, key)?
         {
-            return Ok(selection);
+            match handle_key(app, store, key) {
+                Ok(Some(selection)) => return Ok(selection),
+                Ok(None) => {}
+                Err(err) => show_error_popup(
+                    app,
+                    "Operation failed (Esc closes error details)",
+                    format!("{err:#}"),
+                ),
+            }
         }
     }
 }
@@ -129,6 +136,13 @@ fn handle_key(
         return Ok(Some(None));
     }
 
+    if app.has_error_popup() {
+        if key.code == KeyCode::Esc {
+            app.clear_error_popup();
+        }
+        return Ok(None);
+    }
+
     match app.mode() {
         InputMode::Normal => handle_normal_key(app, key),
         InputMode::Search => handle_search_key(app, key),
@@ -138,6 +152,11 @@ fn handle_key(
         InputMode::Help => handle_help_key(app, key),
         InputMode::Scp => handle_scp_key(app, store, key),
     }
+}
+
+fn show_error_popup(app: &mut AppState, reminder: &str, details: impl Into<String>) {
+    app.set_error(reminder, details.into());
+    app.set_pending(None);
 }
 
 fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<Session>>> {
@@ -839,6 +858,25 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             );
         frame.render_widget(help_panel, help_area);
     }
+
+    if let Some(error_details) = app.error_popup() {
+        let modal_area = centered_rect(80, 70, size);
+        frame.render_widget(Clear, modal_area);
+        let modal_text = format!(
+            "An error occurred.\n\n{}\n\n[Esc] Close this panel",
+            error_details
+        );
+        let modal = Paragraph::new(modal_text)
+            .style(Style::default().fg(theme.text))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border))
+                    .title("Error"),
+            );
+        frame.render_widget(modal, modal_area);
+    }
 }
 
 fn parse_color(name: &str) -> Color {
@@ -1200,14 +1238,14 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     let tags = split_tags(&tags_input);
 
     // Store password in keyring if provided
+    let mut password_warning: Option<String> = None;
     let has_stored_password = if !password.is_empty() {
-        use crate::password;
-        match password::store_password(&name, &password) {
-            Ok(_) => true,
-            Err(e) => {
-                app.set_status(format!("Failed to store password: {:#}", e));
-                return Ok(());
+        match try_store_password_for_ui(&name, &password)? {
+            Some(warning) => {
+                password_warning = Some(warning);
+                false
             }
+            None => true,
         }
     } else {
         false
@@ -1225,13 +1263,21 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     };
 
     if let Err(err) = store.add(session.clone()) {
-        app.set_status(format!("Failed to add session: {}", err));
+        show_error_popup(
+            app,
+            "Failed to add session (Esc closes error details)",
+            format!("Failed to add session: {err:#}"),
+        );
         return Ok(());
     }
 
     app.add_session(session);
     app.cancel_add_session();
-    app.set_status(format!("Added session: {}", name));
+    if let Some(warning) = password_warning {
+        app.set_status(format!("Added session: {} ({})", name, warning));
+    } else {
+        app.set_status(format!("Added session: {}", name));
+    }
     Ok(())
 }
 
@@ -1275,14 +1321,14 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     let tags = split_tags(&tags_input);
 
     // Handle password update - preserve existing if no new password provided
+    let mut password_warning: Option<String> = None;
     let has_stored_password = if !password.is_empty() {
-        use crate::password;
-        match password::store_password(&name, &password) {
-            Ok(_) => true,
-            Err(e) => {
-                app.set_status(format!("Failed to store password: {:#}", e));
-                return Ok(());
+        match try_store_password_for_ui(&name, &password)? {
+            Some(warning) => {
+                password_warning = Some(warning);
+                false
             }
+            None => true,
         }
     } else {
         // Preserve existing password status when editing
@@ -1306,14 +1352,34 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     };
 
     if let Err(err) = store.update(session.clone()) {
-        app.set_status(format!("Failed to update session: {}", err));
+        show_error_popup(
+            app,
+            "Failed to update session (Esc closes error details)",
+            format!("Failed to update session: {err:#}"),
+        );
         return Ok(());
     }
 
     app.update_session(&original_name, session);
     app.cancel_add_session();
-    app.set_status(format!("Updated session: {}", name));
+    if let Some(warning) = password_warning {
+        app.set_status(format!("Updated session: {} ({})", name, warning));
+    } else {
+        app.set_status(format!("Updated session: {}", name));
+    }
     Ok(())
+}
+
+fn try_store_password_for_ui(session_name: &str, value: &str) -> Result<Option<String>> {
+    use crate::password;
+
+    match password::store_password(session_name, value) {
+        Ok(()) => Ok(None),
+        Err(err) if password::is_backend_unavailable_error(&err) => {
+            Ok(Some("password not saved: keyring unavailable".to_string()))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn submit_scp(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {

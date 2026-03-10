@@ -27,6 +27,7 @@ pub struct AppState {
     mode: InputMode,
     pending: Option<char>,
     status: String,
+    error_popup: Option<String>,
     delete_target: Option<String>,
     delete_input: String,
     add_form: Option<AddSessionForm>,
@@ -48,6 +49,7 @@ impl AppState {
             mode: InputMode::Normal,
             pending: None,
             status: String::new(),
+            error_popup: None,
             delete_target: None,
             delete_input: String::new(),
             add_form: None,
@@ -91,6 +93,23 @@ impl AppState {
 
     pub fn clear_status(&mut self) {
         self.status.clear();
+    }
+
+    pub fn set_error(&mut self, reminder: impl Into<String>, details: impl Into<String>) {
+        self.status = reminder.into();
+        self.error_popup = Some(details.into());
+    }
+
+    pub fn clear_error_popup(&mut self) {
+        self.error_popup = None;
+    }
+
+    pub fn error_popup(&self) -> Option<&str> {
+        self.error_popup.as_deref()
+    }
+
+    pub fn has_error_popup(&self) -> bool {
+        self.error_popup.is_some()
     }
 
     pub fn move_next(&mut self) {
@@ -790,5 +809,30 @@ mod tests {
         form.insert_char('X');
 
         assert_eq!(form.name, "offiXce");
+    }
+
+    #[test]
+    fn set_error_stores_popup_and_status_reminder() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+
+        app.set_error("Failure reminder", "full stack-like error details");
+
+        assert_eq!(app.status(), "Failure reminder");
+        assert_eq!(app.error_popup(), Some("full stack-like error details"));
+        assert!(app.has_error_popup());
+    }
+
+    #[test]
+    fn clear_error_popup_hides_details_and_keeps_status() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+
+        app.set_error("Failure reminder", "full error");
+        app.clear_error_popup();
+
+        assert_eq!(app.status(), "Failure reminder");
+        assert_eq!(app.error_popup(), None);
+        assert!(!app.has_error_popup());
     }
 }
