@@ -30,6 +30,7 @@ pub struct AppState {
     delete_target: Option<String>,
     delete_input: String,
     add_form: Option<AddSessionForm>,
+    yank_buffer: Option<Session>,
     scp_form: Option<ScpForm>,
     monitor_enabled: bool,
     monitor_last_update: Option<Instant>,
@@ -49,6 +50,7 @@ impl AppState {
             delete_target: None,
             delete_input: String::new(),
             add_form: None,
+            yank_buffer: None,
             scp_form: None,
             monitor_enabled: false,
             monitor_last_update: None,
@@ -206,6 +208,58 @@ impl AppState {
     pub fn start_add_session(&mut self, default_user: Option<String>) {
         self.add_form = Some(AddSessionForm::new(default_user));
         self.mode = InputMode::AddSession;
+    }
+
+    pub fn yank_selected(&mut self) -> Option<String> {
+        let session = self.selected_session()?.clone();
+        let name = session.name.clone();
+        self.yank_buffer = Some(session);
+        Some(name)
+    }
+
+    pub fn start_paste_session(&mut self, name: String) -> bool {
+        let Some(session) = self.yank_buffer.as_ref() else {
+            return false;
+        };
+
+        let mut form = AddSessionForm::from_session(session);
+        form.name = name;
+        self.add_form = Some(form);
+        self.mode = InputMode::AddSession;
+        true
+    }
+
+    pub fn next_copy_name_for_yank(&self) -> Option<String> {
+        let base = self
+            .yank_buffer
+            .as_ref()
+            .map(|session| session.name.as_str())?;
+        Some(self.next_copy_name(base))
+    }
+
+    pub fn next_copy_name(&self, base: &str) -> String {
+        let base = if base.trim().is_empty() {
+            "session"
+        } else {
+            base.trim()
+        };
+        let initial = format!("{base}-copy");
+        if !self.sessions.iter().any(|session| session.name == initial) {
+            return initial;
+        }
+
+        let mut index = 2;
+        loop {
+            let candidate = format!("{base}-copy-{index}");
+            if !self
+                .sessions
+                .iter()
+                .any(|session| session.name == candidate)
+            {
+                return candidate;
+            }
+            index += 1;
+        }
     }
 
     pub fn start_edit_session(&mut self, session: &Session) {
@@ -530,5 +584,66 @@ impl ScpForm {
             ScpField::Remote => Some(&mut self.remote_path),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_session(name: &str) -> Session {
+        Session {
+            name: name.to_string(),
+            host: "example.com".to_string(),
+            user: "alice".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec!["prod".to_string()],
+            last_connected_at: None,
+            has_stored_password: true,
+        }
+    }
+
+    #[test]
+    fn next_copy_name_uses_copy_suffix() {
+        let sessions = vec![
+            sample_session("office"),
+            sample_session("office-copy"),
+            sample_session("office-copy-2"),
+        ];
+        let app = AppState::new(&sessions);
+        assert_eq!(app.next_copy_name("office"), "office-copy-3");
+    }
+
+    #[test]
+    fn next_copy_name_uses_first_copy_when_available() {
+        let sessions = vec![sample_session("office")];
+        let app = AppState::new(&sessions);
+        assert_eq!(app.next_copy_name("office"), "office-copy");
+    }
+
+    #[test]
+    fn yank_and_paste_prefills_add_form() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+
+        assert_eq!(app.yank_selected(), Some("office".to_string()));
+        assert!(app.start_paste_session("office-copy".to_string()));
+        assert_eq!(app.mode(), InputMode::AddSession);
+
+        let form = app.add_form().expect("paste should open add form");
+        assert_eq!(form.name, "office-copy");
+        assert_eq!(form.host, "example.com");
+        assert_eq!(form.user, "alice");
+        assert_eq!(form.port, "22");
+        assert_eq!(form.tags, "prod");
+        assert!(form.password.is_empty());
+    }
+
+    #[test]
+    fn paste_without_yank_fails() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+        assert!(!app.start_paste_session("office-copy".to_string()));
     }
 }
