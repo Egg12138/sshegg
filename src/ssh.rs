@@ -122,6 +122,13 @@ impl KeyboardInteractivePrompt for StaticPasswordPrompter {
     }
 }
 
+fn is_likely_invalid_password_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}").to_lowercase();
+    message.contains("authentication failed")
+        || message.contains("invalid password")
+        || message.contains("incorrect password")
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
@@ -200,16 +207,17 @@ fn collect_identity_candidates(session_identity: Option<&str>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let home = home_dir();
 
+    if let Some(session_identity) = session_identity {
+        let identity = expand_tilde_path(session_identity, home.as_deref());
+        push_unique_path(&mut candidates, &mut seen, identity);
+        return candidates;
+    }
+
     if let Some(home) = home.as_deref() {
         let ssh_dir = home.join(".ssh");
         for candidate in discover_identity_files_in_dir(&ssh_dir) {
             push_unique_path(&mut candidates, &mut seen, candidate);
         }
-    }
-
-    if let Some(session_identity) = session_identity {
-        let identity = expand_tilde_path(session_identity, home.as_deref());
-        push_unique_path(&mut candidates, &mut seen, identity);
     }
 
     candidates
@@ -248,11 +256,20 @@ impl SshConnection {
             Err(_) => AuthMethodHints::permissive(),
         };
         let mut attempts = Vec::new();
+        let mut password_attempted = false;
+        let mut password_rejected = false;
 
         if auth_methods.publickey {
-            match Self::try_agent_auth(sess, user) {
-                Ok(()) => return Ok(()),
-                Err(err) => attempts.push(format!("SSH agent auth failed: {err:#}")),
+            let has_explicit_identity = auth_config.identity_file.is_some();
+            if !has_explicit_identity {
+                match Self::try_agent_auth(sess, user) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => attempts.push(format!("SSH agent auth failed: {err:#}")),
+                }
+            } else {
+                attempts.push(
+                    "session identity configured; skipping SSH agent auth attempts".to_string(),
+                );
             }
 
             let identity_candidates =
@@ -278,7 +295,13 @@ impl SshConnection {
             if let Some(password) = auth_config.password.as_deref() {
                 match Self::try_password_auth(sess, user, password, &auth_methods) {
                     Ok(()) => return Ok(()),
-                    Err(err) => attempts.push(format!("explicit password auth failed: {err:#}")),
+                    Err(err) => {
+                        password_attempted = true;
+                        if is_likely_invalid_password_error(&err) {
+                            password_rejected = true;
+                        }
+                        attempts.push(format!("explicit password auth failed: {err:#}"));
+                    }
                 }
             }
 
@@ -288,6 +311,10 @@ impl SshConnection {
                         match Self::try_password_auth(sess, user, &password, &auth_methods) {
                             Ok(()) => return Ok(()),
                             Err(err) => {
+                                password_attempted = true;
+                                if is_likely_invalid_password_error(&err) {
+                                    password_rejected = true;
+                                }
                                 attempts.push(format!("keyring password auth failed: {err:#}"))
                             }
                         }
@@ -305,6 +332,10 @@ impl SshConnection {
                         match Self::try_password_auth(sess, user, &password, &auth_methods) {
                             Ok(()) => return Ok(()),
                             Err(err) => {
+                                password_attempted = true;
+                                if is_likely_invalid_password_error(&err) {
+                                    password_rejected = true;
+                                }
                                 attempts.push(format!("manual password auth failed: {err:#}"))
                             }
                         }
@@ -323,6 +354,16 @@ impl SshConnection {
         } else {
             attempts.join(" | ")
         };
+
+        if password_rejected {
+            return Err(anyhow!(
+                "Password authentication was rejected (likely incorrect password). {summary}"
+            ));
+        }
+
+        if password_attempted {
+            return Err(anyhow!("Password authentication failed. {summary}"));
+        }
 
         Err(anyhow!("No authentication method succeeded: {summary}"))
     }
@@ -688,5 +729,24 @@ mod tests {
         assert_eq!(identities[1], ssh_dir.join("id_rsa"));
         assert_eq!(identities[2], ssh_dir.join("id_custom"));
         assert_eq!(identities.len(), 3);
+    }
+
+    #[test]
+    fn collect_identity_candidates_with_explicit_identity_only_returns_explicit_path() {
+        let explicit = "/tmp/test-key";
+        let identities = collect_identity_candidates(Some(explicit));
+        assert_eq!(identities, vec![PathBuf::from(explicit)]);
+    }
+
+    #[test]
+    fn invalid_password_error_detection_matches_authentication_failed() {
+        let err = anyhow!("password method failed: [-18] Authentication failed");
+        assert!(is_likely_invalid_password_error(&err));
+    }
+
+    #[test]
+    fn invalid_password_error_detection_ignores_unrelated_errors() {
+        let err = anyhow!("server does not advertise password authentication");
+        assert!(!is_likely_invalid_password_error(&err));
     }
 }
