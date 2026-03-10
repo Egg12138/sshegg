@@ -10,6 +10,7 @@ pub struct UiConfig {
     pub logo: LogoConfig,
     pub layout: LayoutConfig,
     pub theme: ThemeConfig,
+    pub input: InputConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -92,6 +93,28 @@ impl Default for ThemeConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct InputConfig {
+    pub form_default_mode: FormStartMode,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            form_default_mode: FormStartMode::Normal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FormStartMode {
+    #[default]
+    Normal,
+    Insert,
+}
+
 pub fn load_ui_config(override_path: Option<PathBuf>) -> Result<UiConfig> {
     let path = resolve_ui_config_path(override_path)?;
     if let Some(path) = path {
@@ -148,6 +171,9 @@ mod tests {
         assert_eq!(config.theme.help, "Green");
         assert_eq!(config.theme.status, "Magenta");
         assert_eq!(config.theme.text, "White");
+
+        // Input config
+        assert_eq!(config.input.form_default_mode, FormStartMode::Normal);
     }
 
     #[test]
@@ -208,6 +234,9 @@ mod tests {
                 "help": "Yellow",
                 "status": "Cyan",
                 "text": "Magenta"
+            },
+            "input": {
+                "form_default_mode": "insert"
             }
         }"#;
         let config: UiConfig = serde_json::from_str(json).unwrap();
@@ -218,15 +247,17 @@ mod tests {
         assert_eq!(config.layout.logo_height, 10);
         assert_eq!(config.theme.logo, "Red");
         assert_eq!(config.theme.header, "Blue");
+        assert_eq!(config.input.form_default_mode, FormStartMode::Insert);
     }
 
     #[test]
     fn deserialize_ui_config_with_defaults() {
-        let json = r#"{"logo": {}, "layout": {}, "theme": {}}"#;
+        let json = r#"{"logo": {}, "layout": {}, "theme": {}, "input": {}}"#;
         let config: UiConfig = serde_json::from_str(json).unwrap();
         assert!(config.logo.enabled);
         assert!(config.layout.show_logo);
         assert_eq!(config.theme.logo, "Cyan");
+        assert_eq!(config.input.form_default_mode, FormStartMode::Normal);
     }
 
     #[test]

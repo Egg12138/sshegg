@@ -26,5 +26,8 @@
     "help": "Green",
     "status": "Magenta",
     "text": "White"
+  },
+  "input": {
+    "form_default_mode": "normal"
   }
 }

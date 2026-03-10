@@ -5,9 +5,11 @@ mod state;
 use crate::model::Session;
 use crate::store::SessionStore;
 use crate::ui::state::{
-    AddField, AddSessionForm, AppState, InputMode, MonitorEntry, ScpDirection, ScpField, ScpForm,
+    AddField, AddSessionForm, AppState, FormEditMode, InputMode, MonitorEntry, ScpDirection,
+    ScpField, ScpForm,
 };
 use anyhow::Result;
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -17,7 +19,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use std::env;
 use std::io;
@@ -37,6 +39,7 @@ struct Theme {
 
 const PAGE_STEP: usize = 5;
 const FIELD_LABEL_WIDTH: usize = 10;
+const CARET_BLINK_MS: u128 = 600;
 const NAVIGATION_NOTES: &str = "↑/↓ or j/k | gg/G | / search | ? for help";
 const HELP_PANEL_LINES: &[&str] = &[
     "?             Toggle this help panel",
@@ -73,10 +76,14 @@ pub fn run_tui(store: &dyn SessionStore, config: &UiConfig) -> Result<Option<Ses
     let sessions = store.list()?;
     let mut app = AppState::new(&sessions);
     app.set_monitor_enabled(config.layout.show_monitor);
+    app.set_form_default_mode(match config.input.form_default_mode {
+        config::FormStartMode::Normal => FormEditMode::Normal,
+        config::FormStartMode::Insert => FormEditMode::Insert,
+    });
     let theme = Theme::from_config(config);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, Hide)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -86,7 +93,8 @@ pub fn run_tui(store: &dyn SessionStore, config: &UiConfig) -> Result<Option<Ses
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        Show
     )?;
     terminal.show_cursor()?;
 
@@ -183,16 +191,16 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
         }
         KeyCode::Char('a') => {
             app.start_add_session(default_user());
-            app.set_status("Add session: Enter/Tab/Up/Down move fields, Esc cancel");
+            set_form_mode_status(app, "Add");
         }
         KeyCode::Char('o') | KeyCode::Char('O') => {
             app.start_add_session(default_user());
-            app.set_status("Add session: Enter/Tab/Up/Down move fields, Esc cancel");
+            set_form_mode_status(app, "Add");
         }
         KeyCode::Char('e') => {
             if let Some(session) = app.selected_session().cloned() {
                 app.start_edit_session(&session);
-                app.set_status("Edit session: Enter/Tab/Up/Down move fields, Esc cancel");
+                set_form_mode_status(app, "Edit");
             } else {
                 app.set_status("No session selected to edit");
             }
@@ -325,38 +333,70 @@ fn handle_add_session_key(
         return Ok(None);
     };
 
-    match key.code {
-        KeyCode::Esc => {
-            app.cancel_add_session();
-            app.clear_status();
-        }
-        KeyCode::Tab => form.next_field(),
-        KeyCode::BackTab => form.prev_field(),
-        KeyCode::Up => form.prev_field(),
-        KeyCode::Down => form.next_field(),
-        KeyCode::Enter => {
-            if form.field() == AddField::Tags {
-                submit_add_session(app, store)?;
-            } else {
-                form.next_field();
+    match form.edit_mode() {
+        FormEditMode::Normal => match key.code {
+            KeyCode::Esc => {
+                app.cancel_add_session();
+                app.clear_status();
             }
-        }
-        KeyCode::Backspace => {
-            form.active_value_mut().pop();
-            if form.field() == AddField::Identity {
-                update_identity_state(form);
+            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => form.prev_field(),
+            KeyCode::Left | KeyCode::Char('h') => form.move_cursor_left(),
+            KeyCode::Right | KeyCode::Char('l') => form.move_cursor_right(),
+            KeyCode::Enter => {
+                if form.field() == AddField::Tags {
+                    submit_add_session(app, store)?;
+                } else {
+                    form.next_field();
+                }
             }
-        }
-        KeyCode::Char(ch)
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-        {
-            form.active_value_mut().push(ch);
-            if form.field() == AddField::Identity {
-                update_identity_state(form);
+            KeyCode::Char('i') => {
+                form.enter_insert_before();
+                app.set_status("Add session [INSERT]: type text, Esc normal, Enter next/save");
             }
-        }
-        _ => {}
+            KeyCode::Char('a') => {
+                form.enter_insert_after();
+                app.set_status("Add session [INSERT]: type text, Esc normal, Enter next/save");
+            }
+            _ => {}
+        },
+        FormEditMode::Insert => match key.code {
+            KeyCode::Esc => {
+                form.set_edit_mode(FormEditMode::Normal);
+                app.set_status(
+                    "Add session [NORMAL]: i/a insert, h/l move cursor, j/k change field, Esc cancel",
+                );
+            }
+            KeyCode::Tab | KeyCode::Down => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+            KeyCode::Left => form.move_cursor_left(),
+            KeyCode::Right => form.move_cursor_right(),
+            KeyCode::Enter => {
+                if form.field() == AddField::Tags {
+                    submit_add_session(app, store)?;
+                } else {
+                    form.next_field();
+                }
+            }
+            KeyCode::Backspace => {
+                let active_field = form.field();
+                form.backspace_char();
+                if active_field == AddField::Identity {
+                    update_identity_state(form);
+                }
+            }
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(event::KeyModifiers::ALT) =>
+            {
+                let active_field = form.field();
+                form.insert_char(ch);
+                if active_field == AddField::Identity {
+                    update_identity_state(form);
+                }
+            }
+            _ => {}
+        },
     }
 
     Ok(None)
@@ -372,38 +412,70 @@ fn handle_edit_session_key(
         return Ok(None);
     };
 
-    match key.code {
-        KeyCode::Esc => {
-            app.cancel_add_session();
-            app.clear_status();
-        }
-        KeyCode::Tab => form.next_field(),
-        KeyCode::BackTab => form.prev_field(),
-        KeyCode::Up => form.prev_field(),
-        KeyCode::Down => form.next_field(),
-        KeyCode::Enter => {
-            if form.field() == AddField::Tags {
-                submit_edit_session(app, store)?;
-            } else {
-                form.next_field();
+    match form.edit_mode() {
+        FormEditMode::Normal => match key.code {
+            KeyCode::Esc => {
+                app.cancel_add_session();
+                app.clear_status();
             }
-        }
-        KeyCode::Backspace => {
-            form.active_value_mut().pop();
-            if form.field() == AddField::Identity {
-                update_identity_state(form);
+            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => form.prev_field(),
+            KeyCode::Left | KeyCode::Char('h') => form.move_cursor_left(),
+            KeyCode::Right | KeyCode::Char('l') => form.move_cursor_right(),
+            KeyCode::Enter => {
+                if form.field() == AddField::Tags {
+                    submit_edit_session(app, store)?;
+                } else {
+                    form.next_field();
+                }
             }
-        }
-        KeyCode::Char(ch)
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-        {
-            form.active_value_mut().push(ch);
-            if form.field() == AddField::Identity {
-                update_identity_state(form);
+            KeyCode::Char('i') => {
+                form.enter_insert_before();
+                app.set_status("Edit session [INSERT]: type text, Esc normal, Enter next/save");
             }
-        }
-        _ => {}
+            KeyCode::Char('a') => {
+                form.enter_insert_after();
+                app.set_status("Edit session [INSERT]: type text, Esc normal, Enter next/save");
+            }
+            _ => {}
+        },
+        FormEditMode::Insert => match key.code {
+            KeyCode::Esc => {
+                form.set_edit_mode(FormEditMode::Normal);
+                app.set_status(
+                    "Edit session [NORMAL]: i/a insert, h/l move cursor, j/k change field, Esc cancel",
+                );
+            }
+            KeyCode::Tab | KeyCode::Down => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+            KeyCode::Left => form.move_cursor_left(),
+            KeyCode::Right => form.move_cursor_right(),
+            KeyCode::Enter => {
+                if form.field() == AddField::Tags {
+                    submit_edit_session(app, store)?;
+                } else {
+                    form.next_field();
+                }
+            }
+            KeyCode::Backspace => {
+                let active_field = form.field();
+                form.backspace_char();
+                if active_field == AddField::Identity {
+                    update_identity_state(form);
+                }
+            }
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(event::KeyModifiers::ALT) =>
+            {
+                let active_field = form.field();
+                form.insert_char(ch);
+                if active_field == AddField::Identity {
+                    update_identity_state(form);
+                }
+            }
+            _ => {}
+        },
     }
 
     Ok(None)
@@ -465,6 +537,7 @@ fn handle_scp_key(
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, theme: &Theme) {
+    let show_inline_caret = inline_caret_visible();
     let size = frame.area();
     let mut constraints = Vec::new();
     let mut logo_index = None;
@@ -712,20 +785,14 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     {
         let modal_area = centered_rect(70, 50, size);
         frame.render_widget(Clear, modal_area);
-        let lines = build_add_form_lines(form);
+        let lines = build_add_form_lines(form, show_inline_caret);
         let modal = Paragraph::new(lines.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.border))
-                .title("Add Session"),
+                .title(form_panel_title("Add", form.edit_mode(), theme)),
         );
         frame.render_widget(modal, modal_area);
-
-        let field_index = add_field_index(form.field()) as u16;
-        let cursor_x =
-            modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + form.active_value().len() as u16;
-        let cursor_y = modal_area.y + 1 + field_index;
-        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
     if app.mode() == InputMode::EditSession
@@ -733,20 +800,14 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     {
         let modal_area = centered_rect(70, 50, size);
         frame.render_widget(Clear, modal_area);
-        let lines = build_add_form_lines(form);
+        let lines = build_add_form_lines(form, show_inline_caret);
         let modal = Paragraph::new(lines.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.border))
-                .title("Edit Session"),
+                .title(form_panel_title("Edit", form.edit_mode(), theme)),
         );
         frame.render_widget(modal, modal_area);
-
-        let field_index = add_field_index(form.field()) as u16;
-        let cursor_x =
-            modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + form.active_value().len() as u16;
-        let cursor_y = modal_area.y + 1 + field_index;
-        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
     if app.mode() == InputMode::Scp
@@ -754,7 +815,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     {
         let modal_area = centered_rect(70, 45, size);
         frame.render_widget(Clear, modal_area);
-        let lines = build_scp_form_lines(form);
+        let lines = build_scp_form_lines(form, show_inline_caret);
         let modal = Paragraph::new(lines.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
@@ -762,18 +823,6 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
                 .title("SCP"),
         );
         frame.render_widget(modal, modal_area);
-
-        if matches!(form.field(), ScpField::Local | ScpField::Remote) {
-            let field_index = scp_field_index(form.field()) as u16;
-            let value_len = match form.field() {
-                ScpField::Local => form.local_path.len(),
-                ScpField::Remote => form.remote_path.len(),
-                _ => 0,
-            } as u16;
-            let cursor_x = modal_area.x + 1 + (FIELD_LABEL_WIDTH + 4) as u16 + value_len;
-            let cursor_y = modal_area.y + 1 + field_index;
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
     }
 
     if app.mode() == InputMode::Help {
@@ -821,10 +870,68 @@ fn mode_help_text(mode: InputMode) -> &'static str {
         }
         InputMode::Search => "Type to filter | Enter/Esc to exit | j/k move",
         InputMode::ConfirmDelete => "Type name | Enter confirm | Esc cancel",
-        InputMode::AddSession => "Up/Down move | Tab/Enter next | Shift-Tab prev | Esc cancel",
-        InputMode::EditSession => "Up/Down move | Tab/Enter next | Shift-Tab prev | Esc cancel",
+        InputMode::AddSession => {
+            "NORMAL: i/a insert, h/l cursor, j/k field, Enter next/save, Esc cancel | INSERT: type, Backspace, Esc normal"
+        }
+        InputMode::EditSession => {
+            "NORMAL: i/a insert, h/l cursor, j/k field, Enter next/save, Esc cancel | INSERT: type, Backspace, Esc normal"
+        }
         InputMode::Scp => "Tab/Enter next | Space toggle | Esc cancel",
         InputMode::Help => "? or Esc close | Ctrl-c exit",
+    }
+}
+
+fn form_panel_title(panel: &str, mode: FormEditMode, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{panel} Session | "),
+            Style::default()
+                .fg(theme.header)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            FormEditMode::Normal.label(),
+            form_mode_badge_style(
+                matches!(mode, FormEditMode::Normal),
+                theme.header,
+                theme.text,
+            ),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            FormEditMode::Insert.label(),
+            form_mode_badge_style(
+                matches!(mode, FormEditMode::Insert),
+                theme.highlight,
+                theme.text,
+            ),
+        ),
+    ])
+}
+
+fn form_mode_badge_style(active: bool, active_color: Color, inactive_color: Color) -> Style {
+    if active {
+        Style::default()
+            .fg(active_color)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    } else {
+        Style::default()
+            .fg(inactive_color)
+            .add_modifier(Modifier::DIM)
+    }
+}
+
+fn set_form_mode_status(app: &mut AppState, panel: &str) {
+    let Some(form) = app.add_form() else {
+        return;
+    };
+    match form.edit_mode() {
+        FormEditMode::Normal => app.set_status(format!(
+            "{panel} session [NORMAL]: i/a insert, h/l move cursor, j/k change field, Esc cancel"
+        )),
+        FormEditMode::Insert => app.set_status(format!(
+            "{panel} session [INSERT]: type text, Esc normal, Enter next/save"
+        )),
     }
 }
 
@@ -848,30 +955,51 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn build_add_form_lines(form: &AddSessionForm) -> Vec<String> {
+fn build_add_form_lines(form: &AddSessionForm, show_inline_caret: bool) -> Vec<String> {
     // Mask password display
     let password_display = if form.password.is_empty() {
         String::new()
     } else {
         "*".repeat(form.password.len())
     };
+    let active_caret = Caret::new(form.edit_mode(), form.cursor(), show_inline_caret);
 
     let mut lines = vec![
-        field_line("Name", &form.name, form.field() == AddField::Name),
-        field_line("Host", &form.host, form.field() == AddField::Host),
-        field_line("User", &form.user, form.field() == AddField::User),
-        field_line("Port", &form.port, form.field() == AddField::Port),
+        field_line(
+            "Name",
+            &form.name,
+            caret_for(form, AddField::Name, active_caret),
+        ),
+        field_line(
+            "Host",
+            &form.host,
+            caret_for(form, AddField::Host, active_caret),
+        ),
+        field_line(
+            "User",
+            &form.user,
+            caret_for(form, AddField::User, active_caret),
+        ),
+        field_line(
+            "Port",
+            &form.port,
+            caret_for(form, AddField::Port, active_caret),
+        ),
         field_line(
             "Identity",
             &form.identity_file,
-            form.field() == AddField::Identity,
+            caret_for(form, AddField::Identity, active_caret),
         ),
         field_line(
             "Password",
             &password_display,
-            form.field() == AddField::Password,
+            caret_for(form, AddField::Password, active_caret),
         ),
-        field_line("Tags", &form.tags, form.field() == AddField::Tags),
+        field_line(
+            "Tags",
+            &form.tags,
+            caret_for(form, AddField::Tags, active_caret),
+        ),
     ];
 
     let identity_status = match form.identity_exists() {
@@ -891,7 +1019,7 @@ fn build_add_form_lines(form: &AddSessionForm) -> Vec<String> {
     lines
 }
 
-fn build_scp_form_lines(form: &ScpForm) -> Vec<String> {
+fn build_scp_form_lines(form: &ScpForm, show_inline_caret: bool) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!(
         "Session: {} ({})",
@@ -901,30 +1029,63 @@ fn build_scp_form_lines(form: &ScpForm) -> Vec<String> {
     lines.push(field_line(
         "Direction",
         form.direction.label(),
-        form.field() == ScpField::Direction,
+        if form.field() == ScpField::Direction {
+            Some(Caret::new(
+                FormEditMode::Insert,
+                form.direction.label().chars().count(),
+                show_inline_caret,
+            ))
+        } else {
+            None
+        },
     ));
     lines.push(field_line(
         "Local",
         &form.local_path,
-        form.field() == ScpField::Local,
+        if form.field() == ScpField::Local {
+            Some(Caret::new(
+                FormEditMode::Insert,
+                form.local_path.chars().count(),
+                show_inline_caret,
+            ))
+        } else {
+            None
+        },
     ));
     lines.push(field_line(
         "Remote",
         &form.remote_path,
-        form.field() == ScpField::Remote,
+        if form.field() == ScpField::Remote {
+            Some(Caret::new(
+                FormEditMode::Insert,
+                form.remote_path.chars().count(),
+                show_inline_caret,
+            ))
+        } else {
+            None
+        },
     ));
     let recursive_value = if form.recursive { "yes" } else { "no" };
     lines.push(field_line(
         "Recursive",
         recursive_value,
-        form.field() == ScpField::Recursive,
+        if form.field() == ScpField::Recursive {
+            Some(Caret::new(
+                FormEditMode::Insert,
+                recursive_value.chars().count(),
+                show_inline_caret,
+            ))
+        } else {
+            None
+        },
     ));
     lines.push("  Space toggles Direction/Recursive".to_string());
     lines
 }
 
-fn field_line(label: &str, value: &str, active: bool) -> String {
-    let marker = if active { ">" } else { " " };
+fn field_line(label: &str, value: &str, caret: Option<Caret>) -> String {
+    let marker = if caret.is_some() { ">" } else { " " };
+    let value = render_with_caret(value, caret);
     format!(
         "{} {:<width$} {}",
         marker,
@@ -934,25 +1095,70 @@ fn field_line(label: &str, value: &str, active: bool) -> String {
     )
 }
 
-fn add_field_index(field: AddField) -> usize {
-    match field {
-        AddField::Name => 0,
-        AddField::Host => 1,
-        AddField::User => 2,
-        AddField::Port => 3,
-        AddField::Identity => 4,
-        AddField::Password => 5,
-        AddField::Tags => 6,
+#[derive(Debug, Clone, Copy)]
+struct Caret {
+    mode: FormEditMode,
+    char_index: usize,
+    blink_visible: bool,
+}
+
+impl Caret {
+    fn new(mode: FormEditMode, char_index: usize, blink_visible: bool) -> Self {
+        Self {
+            mode,
+            char_index,
+            blink_visible,
+        }
     }
 }
 
-fn scp_field_index(field: ScpField) -> usize {
-    match field {
-        ScpField::Direction => 1,
-        ScpField::Local => 2,
-        ScpField::Remote => 3,
-        ScpField::Recursive => 4,
+fn caret_for(form: &AddSessionForm, field: AddField, active_caret: Caret) -> Option<Caret> {
+    if form.field() == field {
+        Some(active_caret)
+    } else {
+        None
     }
+}
+
+fn render_with_caret(value: &str, caret: Option<Caret>) -> String {
+    let Some(caret) = caret else {
+        return value.to_string();
+    };
+
+    let show = match caret.mode {
+        FormEditMode::Normal => true,
+        FormEditMode::Insert => caret.blink_visible,
+    };
+    if !show {
+        return value.to_string();
+    }
+
+    let cursor = caret.char_index.min(value.chars().count());
+    let byte_index = char_to_byte_index(value, cursor);
+    let mut rendered = String::with_capacity(value.len() + 1);
+    rendered.push_str(&value[..byte_index]);
+    rendered.push('|');
+    rendered.push_str(&value[byte_index..]);
+    rendered
+}
+
+fn char_to_byte_index(value: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or(value.len())
+}
+
+fn inline_caret_visible() -> bool {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| ((duration.as_millis() / CARET_BLINK_MS) % 2) == 0)
+        .unwrap_or(true)
 }
 
 fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {

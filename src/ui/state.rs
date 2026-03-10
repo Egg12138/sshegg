@@ -30,6 +30,7 @@ pub struct AppState {
     delete_target: Option<String>,
     delete_input: String,
     add_form: Option<AddSessionForm>,
+    form_default_mode: FormEditMode,
     yank_buffer: Option<Session>,
     scp_form: Option<ScpForm>,
     monitor_enabled: bool,
@@ -50,6 +51,7 @@ impl AppState {
             delete_target: None,
             delete_input: String::new(),
             add_form: None,
+            form_default_mode: FormEditMode::Normal,
             yank_buffer: None,
             scp_form: None,
             monitor_enabled: false,
@@ -206,7 +208,7 @@ impl AppState {
     }
 
     pub fn start_add_session(&mut self, default_user: Option<String>) {
-        self.add_form = Some(AddSessionForm::new(default_user));
+        self.add_form = Some(AddSessionForm::new(default_user, self.form_default_mode));
         self.mode = InputMode::AddSession;
     }
 
@@ -222,8 +224,9 @@ impl AppState {
             return false;
         };
 
-        let mut form = AddSessionForm::from_session(session);
+        let mut form = AddSessionForm::from_session(session, self.form_default_mode);
         form.name = name;
+        form.set_cursor_to_end();
         self.add_form = Some(form);
         self.mode = InputMode::AddSession;
         true
@@ -263,8 +266,15 @@ impl AppState {
     }
 
     pub fn start_edit_session(&mut self, session: &Session) {
-        self.add_form = Some(AddSessionForm::from_session(session));
+        self.add_form = Some(AddSessionForm::from_session(
+            session,
+            self.form_default_mode,
+        ));
         self.mode = InputMode::EditSession;
+    }
+
+    pub fn set_form_default_mode(&mut self, mode: FormEditMode) {
+        self.form_default_mode = mode;
     }
 
     pub fn cancel_add_session(&mut self) {
@@ -389,6 +399,21 @@ impl AddField {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormEditMode {
+    Normal,
+    Insert,
+}
+
+impl FormEditMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            FormEditMode::Normal => "NORMAL",
+            FormEditMode::Insert => "INSERT",
+        }
+    }
+}
+
 pub struct AddSessionForm {
     pub name: String,
     pub host: String,
@@ -398,13 +423,15 @@ pub struct AddSessionForm {
     pub password: String,
     pub tags: String,
     field: AddField,
+    edit_mode: FormEditMode,
+    field_cursor: usize,
     identity_exists: Option<bool>,
     identity_suggestions: Vec<String>,
 }
 
 impl AddSessionForm {
-    fn new(default_user: Option<String>) -> Self {
-        Self {
+    fn new(default_user: Option<String>, edit_mode: FormEditMode) -> Self {
+        let mut form = Self {
             name: String::new(),
             host: String::new(),
             user: default_user.unwrap_or_default(),
@@ -413,13 +440,17 @@ impl AddSessionForm {
             password: String::new(),
             tags: String::new(),
             field: AddField::Name,
+            edit_mode,
+            field_cursor: 0,
             identity_exists: None,
             identity_suggestions: Vec::new(),
-        }
+        };
+        form.set_cursor_to_end();
+        form
     }
 
-    fn from_session(session: &Session) -> Self {
-        Self {
+    fn from_session(session: &Session, edit_mode: FormEditMode) -> Self {
+        let mut form = Self {
             name: session.name.clone(),
             host: session.host.clone(),
             user: session.user.clone(),
@@ -432,9 +463,13 @@ impl AddSessionForm {
             password: String::new(), // Don't load existing password
             tags: session.tags.join(","),
             field: AddField::Name,
+            edit_mode,
+            field_cursor: 0,
             identity_exists: None,
             identity_suggestions: Vec::new(),
-        }
+        };
+        form.set_cursor_to_end();
+        form
     }
 
     pub fn field(&self) -> AddField {
@@ -443,22 +478,75 @@ impl AddSessionForm {
 
     pub fn next_field(&mut self) {
         self.field = self.field.next();
+        self.set_cursor_to_end();
     }
 
     pub fn prev_field(&mut self) {
         self.field = self.field.prev();
+        self.set_cursor_to_end();
     }
 
-    pub fn active_value(&self) -> &str {
-        match self.field {
-            AddField::Name => &self.name,
-            AddField::Host => &self.host,
-            AddField::User => &self.user,
-            AddField::Port => &self.port,
-            AddField::Identity => &self.identity_file,
-            AddField::Password => &self.password,
-            AddField::Tags => &self.tags,
+    pub fn edit_mode(&self) -> FormEditMode {
+        self.edit_mode
+    }
+
+    pub fn set_edit_mode(&mut self, edit_mode: FormEditMode) {
+        self.edit_mode = edit_mode;
+        self.clamp_cursor();
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.field_cursor
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.field_cursor > 0 {
+            self.field_cursor -= 1;
         }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        let len = self.active_value().chars().count();
+        if self.field_cursor < len {
+            self.field_cursor += 1;
+        }
+    }
+
+    pub fn set_cursor_to_end(&mut self) {
+        self.field_cursor = self.active_value().chars().count();
+    }
+
+    pub fn enter_insert_before(&mut self) {
+        self.edit_mode = FormEditMode::Insert;
+        self.clamp_cursor();
+    }
+
+    pub fn enter_insert_after(&mut self) {
+        let len = self.active_value().chars().count();
+        if self.field_cursor < len {
+            self.field_cursor += 1;
+        }
+        self.edit_mode = FormEditMode::Insert;
+    }
+
+    pub fn insert_char(&mut self, ch: char) {
+        let cursor = self.field_cursor;
+        let byte_index = char_to_byte_index(self.active_value(), cursor);
+        self.active_value_mut().insert(byte_index, ch);
+        self.field_cursor += 1;
+    }
+
+    pub fn backspace_char(&mut self) {
+        if self.field_cursor == 0 {
+            return;
+        }
+
+        let cursor = self.field_cursor;
+        let value = self.active_value_mut();
+        let start = char_to_byte_index(value, cursor - 1);
+        let end = char_to_byte_index(value, cursor);
+        value.replace_range(start..end, "");
+        self.field_cursor -= 1;
     }
 
     pub fn active_value_mut(&mut self) -> &mut String {
@@ -485,6 +573,36 @@ impl AddSessionForm {
         self.identity_exists = exists;
         self.identity_suggestions = suggestions;
     }
+
+    pub fn active_value(&self) -> &str {
+        match self.field {
+            AddField::Name => &self.name,
+            AddField::Host => &self.host,
+            AddField::User => &self.user,
+            AddField::Port => &self.port,
+            AddField::Identity => &self.identity_file,
+            AddField::Password => &self.password,
+            AddField::Tags => &self.tags,
+        }
+    }
+
+    fn clamp_cursor(&mut self) {
+        let len = self.active_value().chars().count();
+        if self.field_cursor > len {
+            self.field_cursor = len;
+        }
+    }
+}
+
+fn char_to_byte_index(value: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or(value.len())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -645,5 +763,32 @@ mod tests {
         let sessions = vec![sample_session("office")];
         let mut app = AppState::new(&sessions);
         assert!(!app.start_paste_session("office-copy".to_string()));
+    }
+
+    #[test]
+    fn form_default_mode_applies_to_edit_session() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+        app.set_form_default_mode(FormEditMode::Insert);
+        let session = app.selected_session().unwrap().clone();
+        app.start_edit_session(&session);
+        let form = app.add_form().unwrap();
+        assert_eq!(form.edit_mode(), FormEditMode::Insert);
+    }
+
+    #[test]
+    fn insert_char_respects_cursor_position() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+        let session = app.selected_session().unwrap().clone();
+        app.start_edit_session(&session);
+
+        let form = app.add_form_mut().unwrap();
+        form.move_cursor_left();
+        form.move_cursor_left();
+        form.enter_insert_before();
+        form.insert_char('X');
+
+        assert_eq!(form.name, "offiXce");
     }
 }

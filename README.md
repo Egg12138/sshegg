@@ -168,6 +168,7 @@ Key options:
 - `layout.status_height`: number of lines reserved for the status line inside the operation bar.
 - `layout.help_height`: number of lines reserved for the cheat sheet (mode help + navigation); if `layout.show_help` is false only the navigation line stays visible.
 - `theme.*`: control logo, header, border, status/info, help, and text colors.
+- `input.form_default_mode`: default form mode for Add/Edit panels (`"normal"` or `"insert"`).
 
 CLI output colors can be customized via `~/.config/ssher/cli.json`, `--cli-config`, or `SSHER_CLI_CONFIG`.
 
