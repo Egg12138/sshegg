@@ -129,6 +129,9 @@ cargo run -- tui
 - `j/k` (or arrow keys) move between sessions; `gg`/`G` jump to top/bottom; `Enter` connects.
 - `/` starts search mode; type to filter, `Enter`/`Esc` exits.
 - `o`/`O` opens the add-session form; `Up`, `Down`, `Tab`, and `Shift-Tab` move fields, `Enter` advances or submits (on the Tags line), and `Esc` cancels.
+- `yy` yanks (copies) the selected session to an internal buffer.
+- `p` pastes the yanked session into a new add-session draft with an auto-generated name (`<name>-copy`, then `-copy-2`, etc.).
+- Pasted drafts keep host/user/port/identity/tags, but do not copy keyring passwords automatically; enter a new password if needed.
 - `dd` starts delete confirmation; type the exact session name and hit `Enter`.
 - `s` launches the SCP helper for the selected session.
 - `m` toggles the monitor panel (active PIDs + last-connected).

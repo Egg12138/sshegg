@@ -44,6 +44,8 @@ const HELP_PANEL_LINES: &[&str] = &[
     "o / O         Add session form",
     "e             Edit selected session",
     "dd            Delete selected session (confirm name)",
+    "yy            Yank selected session",
+    "p             Paste yanked session as a new draft",
     "/             Search (type to filter)",
     "s             Open SCP form",
     "m             Toggle monitor view",
@@ -153,6 +155,32 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
                 app.set_pending(Some('d'));
             }
         }
+        KeyCode::Char('y') => {
+            if app.pending() == Some('y') {
+                if let Some(name) = app.yank_selected() {
+                    app.set_status(format!("Yanked session: {}", name));
+                } else {
+                    app.set_status("No session selected to yank");
+                }
+                app.set_pending(None);
+            } else {
+                app.set_pending(Some('y'));
+            }
+        }
+        KeyCode::Char('p') => {
+            if let Some(new_name) = app.next_copy_name_for_yank() {
+                if app.start_paste_session(new_name.clone()) {
+                    app.set_status(format!(
+                        "Paste session draft: {} (edit and press Enter on Tags to save)",
+                        new_name
+                    ));
+                } else {
+                    app.set_status("No yanked session to paste");
+                }
+            } else {
+                app.set_status("No yanked session to paste");
+            }
+        }
         KeyCode::Char('a') => {
             app.start_add_session(default_user());
             app.set_status("Add session: Enter/Tab/Up/Down move fields, Esc cancel");
@@ -211,7 +239,7 @@ fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<
 
     if handled {
         match key.code {
-            KeyCode::Char('g') | KeyCode::Char('d') => {}
+            KeyCode::Char('g') | KeyCode::Char('d') | KeyCode::Char('y') => {}
             _ => app.set_pending(None),
         }
     } else {
@@ -789,7 +817,7 @@ fn parse_color(name: &str) -> Color {
 fn mode_help_text(mode: InputMode) -> &'static str {
     match mode {
         InputMode::Normal => {
-            "j/k move | gg top | G bottom | Ctrl-d/u page | / search | o/O add | e edit | s scp | m monitor | dd delete | Enter connect | q quit"
+            "j/k move | gg top | G bottom | Ctrl-d/u page | / search | o/O add | e edit | s scp | m monitor | yy yank | p paste | dd delete | Enter connect | q quit"
         }
         InputMode::Search => "Type to filter | Enter/Esc to exit | j/k move",
         InputMode::ConfirmDelete => "Type name | Enter confirm | Esc cancel",
