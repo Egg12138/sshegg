@@ -143,6 +143,14 @@ Default session store path: `~/.config/ssher/sessions.json`. Override with:
 
 Launching the TUI with an empty store prompts you to create the first session interactively.
 
+## Password Keyring Troubleshooting
+
+If you see an error like `Failed to store password: failed to store password in keyring`, the system keyring backend is usually unavailable or locked.
+
+- Linux: ensure a Secret Service backend is running and unlocked (for example `gnome-keyring` or `ksecretservice`) and your session has DBus environment variables (`DBUS_SESSION_BUS_ADDRESS`).
+- macOS: ensure Keychain access is permitted for the app/binary.
+- Windows: ensure Credential Manager service is available.
+
 ## UI Configuration
 
 Customize the TUI layout and theme with a JSON config file. Override the default `~/.config/ssher/ui.json` with:

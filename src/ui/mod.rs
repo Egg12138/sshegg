@@ -971,7 +971,7 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
         match password::store_password(&name, &password) {
             Ok(_) => true,
             Err(e) => {
-                app.set_status(format!("Failed to store password: {}", e));
+                app.set_status(format!("Failed to store password: {:#}", e));
                 return Ok(());
             }
         }
@@ -1046,7 +1046,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
         match password::store_password(&name, &password) {
             Ok(_) => true,
             Err(e) => {
-                app.set_status(format!("Failed to store password: {}", e));
+                app.set_status(format!("Failed to store password: {:#}", e));
                 return Ok(());
             }
         }

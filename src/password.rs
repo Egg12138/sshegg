@@ -1,17 +1,43 @@
 //! Password management using system keyring
 //! Cross-platform: libsecret (Linux), Keychain (macOS), Credential Manager (Windows)
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use keyring::{Entry, Error as KeyringError};
 
 const SERVICE_NAME: &str = "ssher";
+
+fn keyring_hint(err: &KeyringError) -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        match err {
+            KeyringError::NoStorageAccess(_) | KeyringError::PlatformFailure(_) => Some(
+                "hint: ensure a Secret Service provider is running and unlocked (for example gnome-keyring or ksecretservice) and DBus session variables are available",
+            ),
+            _ => None,
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = err;
+        None
+    }
+}
+
+fn format_keyring_error(context: &str, err: KeyringError) -> anyhow::Error {
+    if let Some(hint) = keyring_hint(&err) {
+        anyhow!("{context}: {err}; {hint}")
+    } else {
+        anyhow!("{context}: {err}")
+    }
+}
 
 /// Store password for a session in system keyring
 pub fn store_password(session_name: &str, password: &str) -> Result<()> {
     let entry = Entry::new(SERVICE_NAME, session_name).context("failed to create keyring entry")?;
     entry
         .set_password(password)
-        .context("failed to store password in keyring")
+        .map_err(|err| format_keyring_error("failed to store password in keyring", err))
 }
 
 /// Retrieve password for a session from system keyring
@@ -21,7 +47,10 @@ pub fn get_password(session_name: &str) -> Result<Option<String>> {
     match entry.get_password() {
         Ok(password) => Ok(Some(password)),
         Err(KeyringError::NoEntry) => Ok(None),
-        Err(e) => Err(e).context("failed to retrieve password from keyring"),
+        Err(err) => Err(format_keyring_error(
+            "failed to retrieve password from keyring",
+            err,
+        )),
     }
 }
 
@@ -32,7 +61,10 @@ pub fn delete_password(session_name: &str) -> Result<()> {
     match entry.delete_password() {
         Ok(()) => Ok(()),
         Err(KeyringError::NoEntry) => Ok(()), // Already deleted, OK
-        Err(e) => Err(e).context("failed to delete password from keyring"),
+        Err(err) => Err(format_keyring_error(
+            "failed to delete password from keyring",
+            err,
+        )),
     }
 }
 
