@@ -1,7 +1,7 @@
 //! Password management using system keyring
 //! Cross-platform: libsecret (Linux), Keychain (macOS), Credential Manager (Windows)
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use keyring::{Entry, Error as KeyringError};
 
 const SERVICE_NAME: &str = "ssher";
@@ -25,11 +25,39 @@ fn keyring_hint(err: &KeyringError) -> Option<&'static str> {
 }
 
 fn format_keyring_error(context: &str, err: KeyringError) -> anyhow::Error {
-    if let Some(hint) = keyring_hint(&err) {
-        anyhow!("{context}: {err}; {hint}")
+    let context = if let Some(hint) = keyring_hint(&err) {
+        format!("{context}; {hint}")
     } else {
-        anyhow!("{context}: {err}")
+        context.to_string()
+    };
+
+    anyhow::Error::new(err).context(context)
+}
+
+fn is_keyring_backend_unavailable(err: &KeyringError) -> bool {
+    match err {
+        KeyringError::NoStorageAccess(_) => true,
+        #[cfg(target_os = "linux")]
+        KeyringError::PlatformFailure(source) => {
+            let source = source.to_string().to_lowercase();
+            source.contains("org.freedesktop.dbus.error.serviceunknown")
+                || source.contains("org.freedesktop.dbus.error.namehasnoowner")
+                || source.contains("org.freedesktop.secrets")
+                || source.contains("cannot autolaunch dbus")
+                || source.contains("dbus session")
+                || source.contains("zbus error")
+        }
+        _ => false,
     }
+}
+
+/// Returns true when a keyring operation failed because secure storage is unavailable.
+pub fn is_backend_unavailable_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<KeyringError>()
+            .is_some_and(is_keyring_backend_unavailable)
+    })
 }
 
 /// Store password for a session in system keyring
@@ -77,6 +105,7 @@ pub fn has_password(session_name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     fn keyring_available() -> bool {
         match get_password("ssher_test_keyring_probe") {
@@ -207,5 +236,35 @@ mod tests {
         // Cleanup
         delete_password(session1).unwrap();
         delete_password(session2).unwrap();
+    }
+
+    #[test]
+    fn backend_unavailable_detection_matches_no_storage_access() {
+        let err = format_keyring_error(
+            "failed to store password in keyring",
+            KeyringError::NoStorageAccess(Box::new(io::Error::other("storage locked"))),
+        );
+        assert!(is_backend_unavailable_error(&err));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn backend_unavailable_detection_matches_linux_dbus_backend_errors() {
+        let err = format_keyring_error(
+            "failed to store password in keyring",
+            KeyringError::PlatformFailure(Box::new(io::Error::other(
+                "zbus error: org.freedesktop.DBus.Error.ServiceUnknown",
+            ))),
+        );
+        assert!(is_backend_unavailable_error(&err));
+    }
+
+    #[test]
+    fn backend_unavailable_detection_ignores_unrelated_errors() {
+        let err = format_keyring_error(
+            "failed to store password in keyring",
+            KeyringError::Invalid("target".to_string(), "bad target".to_string()),
+        );
+        assert!(!is_backend_unavailable_error(&err));
     }
 }

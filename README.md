@@ -150,6 +150,8 @@ Launching the TUI with an empty store prompts you to create the first session in
 
 If you see an error like `Failed to store password: failed to store password in keyring`, the system keyring backend is usually unavailable or locked.
 
+When this happens during `add`/`update`, ssher now continues and saves the session without a stored password, and prints a warning.
+
 - Linux: ensure a Secret Service backend is running and unlocked (for example `gnome-keyring` or `ksecretservice`) and your session has DBus environment variables (`DBUS_SESSION_BUS_ADDRESS`).
 - macOS: ensure Keychain access is permitted for the app/binary.
 - Windows: ensure Credential Manager service is available.

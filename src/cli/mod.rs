@@ -258,8 +258,7 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
         session.has_stored_password = false;
     } else if args.password {
         let pwd = rpassword::prompt_password(format!("Enter password for {}: ", session.name))?;
-        password::store_password(&session.name, &pwd)?;
-        session.has_stored_password = true;
+        session.has_stored_password = try_store_password(&session.name, &pwd)?;
     }
 
     store.add(session.clone())?;
@@ -574,6 +573,21 @@ fn remove_password(store: &JsonFileStore, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn try_store_password(session_name: &str, password_value: &str) -> Result<bool> {
+    match password::store_password(session_name, password_value) {
+        Ok(()) => Ok(true),
+        Err(err) if password::is_backend_unavailable_error(&err) => {
+            eprintln!(
+                "Warning: system keyring is unavailable; password was not saved for '{}'.",
+                session_name
+            );
+            eprintln!("Details: {err:#}");
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
     let mut sessions = store.list()?;
     let session = sessions
@@ -609,8 +623,7 @@ fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
     } else if args.password {
         // Update stored password
         let pwd = rpassword::prompt_password(format!("Enter new password for {}: ", args.name))?;
-        password::store_password(&args.name, &pwd)?;
-        session.has_stored_password = true;
+        session.has_stored_password = try_store_password(&args.name, &pwd)?;
     }
 
     store.update(session.clone())?;
