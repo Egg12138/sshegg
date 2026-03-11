@@ -99,11 +99,14 @@ ${BLUE}Options:${NC}
   --prefix PATH           Install to custom location (default: ~/.local/bin)
   --from-source           Force build from source
   --no-completions        Skip shell completion installation
-  --version VERSION       Install specific version (default: latest)
+  -t, --tag TAG           Install specific tag (default: latest)
+  --version VERSION       Install specific version (same as --tag)
   --force                 Force reinstall even if already up to date
 
 ${BLUE}Examples:${NC}
-  ./scripts/install.sh                    # Install to default location
+  ./scripts/install.sh                    # Install latest to default location
+  ./scripts/install.sh -t v0.4.0          # Install specific tag
+  ./scripts/install.sh --version 0.5.0    # Install specific version
   ./scripts/install.sh --prefix ~/bin     # Install to custom location
   ./scripts/install.sh --no-completions   # Skip completions
 
@@ -129,7 +132,7 @@ parse_args() {
                 FORCE_SOURCE=true
                 shift
                 ;;
-            --version)
+            --version|-v|--tag|-t)
                 VERSION="$2"
                 shift 2
                 ;;
