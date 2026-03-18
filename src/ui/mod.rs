@@ -27,7 +27,9 @@ use std::env;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub use config::{ThemeConfig, UiConfig, load_ui_config};
+pub use config::{
+    OrderingConfig, SessionHighlightConfig, SessionOrderMode, ThemeConfig, UiConfig, load_ui_config,
+};
 pub use highlight::SessionHighlight;
 pub use ordering::sort_sessions;
 

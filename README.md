@@ -175,3 +175,43 @@ Key options:
 CLI output colors can be customized via `~/.config/ssher/cli.json`, `--cli-config`, or `SSHER_CLI_CONFIG`.
 
 Sample configs live in `assets/ui.sample.json` and `assets/cli.sample.json`.
+
+## Session Ordering
+
+Configure how sessions are sorted in the TUI by editing `~/.config/ssher/ui.json`:
+
+```json
+{
+  "ordering": {
+    "mode": "latest_first",
+    "lifetime": {
+      "dying_threshold_days": 7
+    }
+  },
+  "highlights": {
+    "hot": "Yellow",
+    "normal": "Blue",
+    "dying": "DarkGray"
+  }
+}
+```
+
+### Ordering Modes
+
+- `latest_first` - Most recently connected sessions appear first (default)
+- `frequency_based` - Sessions connected frequently appear first, weighted by recency
+- `alphabetical` - Sessions sorted alphabetically by name
+
+### Highlight Colors
+
+Sessions are highlighted based on connection recency:
+
+- **Hot** (default: Yellow) - Sessions connected within the last 24 hours
+- **Normal** (default: Blue) - Sessions connected within the threshold period
+- **Dying** (default: DarkGray) - Sessions not connected for longer than the threshold
+
+### Threshold Configuration
+
+The `dying_threshold_days` setting controls when sessions are considered "dying":
+- Default: 7 days
+- Sessions not connected for more than this period are shown with the "dying" highlight color
