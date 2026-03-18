@@ -1,5 +1,6 @@
 mod config;
 mod filter;
+mod highlight;
 mod ordering;
 mod state;
 
@@ -27,6 +28,7 @@ use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use config::{ThemeConfig, UiConfig, load_ui_config};
+pub use highlight::SessionHighlight;
 pub use ordering::sort_sessions;
 
 struct Theme {
