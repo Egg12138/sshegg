@@ -77,7 +77,11 @@ impl Theme {
 }
 
 pub fn run_tui(store: &dyn SessionStore, config: &UiConfig) -> Result<Option<Session>> {
-    let sessions = store.list()?;
+    let mut sessions = store.list()?;
+
+    // Apply ordering based on config
+    sort_sessions(&mut sessions, config.ordering.mode);
+
     let mut app = AppState::new(&sessions);
     app.set_monitor_enabled(config.layout.show_monitor);
     app.set_form_default_mode(match config.input.form_default_mode {
