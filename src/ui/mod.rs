@@ -1,7 +1,7 @@
-mod config;
-mod filter;
-mod highlight;
-mod ordering;
+pub mod config;
+pub mod filter;
+pub mod highlight;
+pub mod ordering;
 mod state;
 
 use crate::model::Session;
@@ -27,9 +27,7 @@ use std::env;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub use config::{
-    OrderingConfig, SessionHighlightConfig, SessionOrderMode, ThemeConfig, UiConfig, load_ui_config,
-};
+pub use config::{ThemeConfig, UiConfig, load_ui_config};
 pub use highlight::SessionHighlight;
 pub use ordering::sort_sessions;
 
@@ -1220,7 +1218,7 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
 fn inline_caret_visible() -> bool {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| ((duration.as_millis() / CARET_BLINK_MS) % 2) == 0)
+        .map(|duration| (duration.as_millis() / CARET_BLINK_MS).is_multiple_of(2))
         .unwrap_or(true)
 }
 

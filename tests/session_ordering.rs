@@ -1,7 +1,6 @@
 use ssher::model::Session;
-use ssher::ui::{
-    OrderingConfig, SessionHighlight, SessionHighlightConfig, SessionOrderMode, sort_sessions,
-};
+use ssher::ui::config::{OrderingConfig, SessionHighlightConfig, SessionOrderMode};
+use ssher::ui::{SessionHighlight, sort_sessions};
 
 #[test]
 fn test_sort_sessions_latest_first() {
