@@ -22,6 +22,7 @@ REPO="Egg12138/sshegg"
 VERSION="${VERSION:-latest}"
 BINARY_NAME_SHORT="se"
 LAST_BUILD_OUTPUT=""
+VERBOSE=true
 
 configure_rust_toolchain_env() {
     local user_home="${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}"
@@ -102,6 +103,8 @@ ${BLUE}Options:${NC}
   -t, --tag TAG           Install specific tag (default: latest)
   --version VERSION       Install specific version (same as --tag)
   --force                 Force reinstall even if already up to date
+  --verbose               Enable verbose output (default: enabled)
+  --quiet                 Disable verbose output
 
 ${BLUE}Examples:${NC}
   ./scripts/install.sh                    # Install latest to default location
@@ -142,6 +145,14 @@ parse_args() {
                 ;;
             --force)
                 FORCE_INSTALL=true
+                shift
+                ;;
+            --verbose)
+                VERBOSE=true
+                shift
+                ;;
+            --quiet)
+                VERBOSE=false
                 shift
                 ;;
             *)
@@ -234,7 +245,9 @@ download_binary() {
             INSTALLED_HASH="unknown"
         fi
 
-        print_step "Installed: ${INSTALLED_VERSION} (${INSTALLED_HASH})"
+        if [[ "$VERBOSE" == "true" ]]; then
+            print_step "Installed: ${INSTALLED_VERSION} (${INSTALLED_HASH})"
+        fi
 
         # Compare versions (only if both are known and we're installing latest)
         if [[ "$VERSION" == "latest" && "$INSTALLED_VERSION" != "unknown" && "$LATEST_VERSION" != "unknown" ]]; then
@@ -263,7 +276,9 @@ download_binary() {
         fi
     fi
 
-    print_step "Downloading from: ${DOWNLOAD_URL}"
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_step "Downloading from: ${DOWNLOAD_URL}"
+    fi
 
     # Create temp directory
     TEMP_DIR=$(mktemp -d)
@@ -310,17 +325,66 @@ download_archive() {
     local archive_path="$2"
 
     if command -v curl &> /dev/null; then
-        if curl -fsSL "$url" -o "$archive_path"; then
-            return 0
+        if [[ "$VERBOSE" == "true" ]]; then
+            # Verbose mode: show progress bar with rolling flag and speed
+            # -# shows progress bar, -C - enables resumability
+            if [[ -f "$archive_path" ]]; then
+                print_step "Resuming download..."
+                if curl -fSL# -C - "$url" -o "$archive_path" 2>&1; then
+                    echo ""
+                    print_success "Download completed"
+                    return 0
+                fi
+            else
+                if curl -fSL# "$url" -o "$archive_path" 2>&1; then
+                    echo ""
+                    print_success "Download completed"
+                    return 0
+                fi
+            fi
+        else
+            # Quiet mode with resume support
+            if [[ -f "$archive_path" ]]; then
+                if curl -fSL -C - -s "$url" -o "$archive_path"; then
+                    return 0
+                fi
+            else
+                if curl -fSL -s "$url" -o "$archive_path"; then
+                    return 0
+                fi
+            fi
         fi
+
         print_warning "Failed to download pre-built archive from ${url}"
         return 1
     fi
 
     if command -v wget &> /dev/null; then
-        if wget -q "$url" -O "$archive_path"; then
+        if [[ "$VERBOSE" == "true" ]]; then
+            # Verbose mode: show progress with bar and speed
+            if [[ -f "$archive_path" ]]; then
+                print_step "Resuming download..."
+                wget --show-progress --progress=bar:force -c "$url" -O "$archive_path"
+            else
+                wget --show-progress --progress=bar:force "$url" -O "$archive_path"
+            fi
+        else
+            # Quiet mode with resume support
+            if [[ -f "$archive_path" ]]; then
+                wget -cq "$url" -O "$archive_path"
+            else
+                wget -q "$url" -O "$archive_path"
+            fi
+        fi
+
+        if [[ $? -eq 0 ]]; then
+            echo ""
+            if [[ "$VERBOSE" == "true" ]]; then
+                print_success "Download completed"
+            fi
             return 0
         fi
+
         print_warning "Failed to download pre-built archive from ${url}"
         return 1
     fi
@@ -413,6 +477,11 @@ build_binary() {
 run_cargo_build() {
     local output=""
     local status=0
+
+    # Print cargo command and all flags in verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_step "Running: cargo $*"
+    fi
 
     set +e
     output=$(cargo "$@" 2>&1)
