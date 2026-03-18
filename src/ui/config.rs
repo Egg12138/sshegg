@@ -11,6 +11,8 @@ pub struct UiConfig {
     pub layout: LayoutConfig,
     pub theme: ThemeConfig,
     pub input: InputConfig,
+    pub ordering: OrderingConfig,
+    pub highlights: SessionHighlightConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -113,6 +115,64 @@ pub enum FormStartMode {
     #[default]
     Normal,
     Insert,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrderMode {
+    #[default]
+    LatestFirst,
+    FrequencyBased,
+    Alphabetical,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SessionLifetimeConfig {
+    /// Days after which a session is considered "dying"
+    pub dying_threshold_days: u32,
+}
+
+impl Default for SessionLifetimeConfig {
+    fn default() -> Self {
+        Self {
+            dying_threshold_days: 7,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SessionHighlightConfig {
+    pub hot: String,
+    pub normal: String,
+    pub dying: String,
+}
+
+impl Default for SessionHighlightConfig {
+    fn default() -> Self {
+        Self {
+            hot: "Yellow".to_string(),
+            normal: "Blue".to_string(),
+            dying: "DarkGray".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct OrderingConfig {
+    pub mode: SessionOrderMode,
+    pub lifetime: SessionLifetimeConfig,
+}
+
+impl Default for OrderingConfig {
+    fn default() -> Self {
+        Self {
+            mode: SessionOrderMode::LatestFirst,
+            lifetime: SessionLifetimeConfig::default(),
+        }
+    }
 }
 
 pub fn load_ui_config(override_path: Option<PathBuf>) -> Result<UiConfig> {
@@ -265,5 +325,76 @@ mod tests {
         let json = r#"{}"#;
         let config: UiConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config, UiConfig::default());
+    }
+
+    #[test]
+    fn session_order_mode_serialization() {
+        assert_eq!(
+            serde_json::to_string(&SessionOrderMode::LatestFirst).unwrap(),
+            r#""latest_first""#
+        );
+        assert_eq!(
+            serde_json::to_string(&SessionOrderMode::FrequencyBased).unwrap(),
+            r#""frequency_based""#
+        );
+        assert_eq!(
+            serde_json::to_string(&SessionOrderMode::Alphabetical).unwrap(),
+            r#""alphabetical""#
+        );
+    }
+
+    #[test]
+    fn session_lifetime_config_default_values() {
+        let config = SessionLifetimeConfig::default();
+        assert_eq!(config.dying_threshold_days, 7);
+    }
+
+    #[test]
+    fn session_highlight_config_default_values() {
+        let config = SessionHighlightConfig::default();
+        assert_eq!(config.hot, "Yellow");
+        assert_eq!(config.normal, "Blue");
+        assert_eq!(config.dying, "DarkGray");
+    }
+
+    #[test]
+    fn ordering_config_default_values() {
+        let config = OrderingConfig::default();
+        assert_eq!(config.mode, SessionOrderMode::LatestFirst);
+        assert_eq!(config.lifetime.dying_threshold_days, 7);
+    }
+
+    #[test]
+    fn deserialize_ui_config_with_ordering_and_highlights() {
+        let json = r#"{
+            "ordering": {
+                "mode": "frequency_based",
+                "lifetime": {
+                    "dying_threshold_days": 14
+                }
+            },
+            "highlights": {
+                "hot": "Red",
+                "normal": "Green",
+                "dying": "White"
+            }
+        }"#;
+        let config: UiConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.ordering.mode, SessionOrderMode::FrequencyBased);
+        assert_eq!(config.ordering.lifetime.dying_threshold_days, 14);
+        assert_eq!(config.highlights.hot, "Red");
+        assert_eq!(config.highlights.normal, "Green");
+        assert_eq!(config.highlights.dying, "White");
+    }
+
+    #[test]
+    fn deserialize_ui_config_ordering_and_highlights_defaults() {
+        let json = r#"{"ordering": {}, "highlights": {}}"#;
+        let config: UiConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.ordering.mode, SessionOrderMode::LatestFirst);
+        assert_eq!(config.ordering.lifetime.dying_threshold_days, 7);
+        assert_eq!(config.highlights.hot, "Yellow");
+        assert_eq!(config.highlights.normal, "Blue");
+        assert_eq!(config.highlights.dying, "DarkGray");
     }
 }

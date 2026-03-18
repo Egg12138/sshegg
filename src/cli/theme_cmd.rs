@@ -183,6 +183,8 @@ pub fn apply_ui_theme(theme: &ThemeConfig) -> Result<()> {
             layout: Default::default(),
             theme: theme.clone(),
             input: Default::default(),
+            ordering: Default::default(),
+            highlights: Default::default(),
         }
     };
 
