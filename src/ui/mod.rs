@@ -660,6 +660,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         } else {
             "-"
         };
+        let highlight_style = get_session_highlight(session, config, theme);
         Row::new(vec![
             Cell::from(session.name.clone()),
             Cell::from(session.target()),
@@ -668,6 +669,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             Cell::from(tags),
             Cell::from(password_indicator),
         ])
+        .style(highlight_style)
     });
 
     let table = Table::new(
@@ -881,6 +883,19 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             );
         frame.render_widget(modal, modal_area);
     }
+}
+
+fn get_session_highlight(session: &Session, config: &UiConfig, _theme: &Theme) -> Style {
+    let highlight =
+        SessionHighlight::classify(session, config.ordering.lifetime.dying_threshold_days);
+
+    let color = match highlight {
+        SessionHighlight::Hot => parse_color(&config.highlights.hot),
+        SessionHighlight::Normal => parse_color(&config.highlights.normal),
+        SessionHighlight::Dying => parse_color(&config.highlights.dying),
+    };
+
+    Style::default().fg(color)
 }
 
 fn parse_color(name: &str) -> Color {
