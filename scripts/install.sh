@@ -23,6 +23,7 @@ VERSION="${VERSION:-latest}"
 BINARY_NAME_SHORT="se"
 LAST_BUILD_OUTPUT=""
 VERBOSE=true
+LOCAL_FILE=""
 
 configure_rust_toolchain_env() {
     local user_home="${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}"
@@ -105,6 +106,7 @@ ${BLUE}Options:${NC}
   --force                 Force reinstall even if already up to date
   --verbose               Enable verbose output (default: enabled)
   --quiet                 Disable verbose output
+  --local PATH            Install from local binary file
 
 ${BLUE}Examples:${NC}
   ./scripts/install.sh                    # Install latest to default location
@@ -112,6 +114,7 @@ ${BLUE}Examples:${NC}
   ./scripts/install.sh --version 0.5.0    # Install specific version
   ./scripts/install.sh --prefix ~/bin     # Install to custom location
   ./scripts/install.sh --no-completions   # Skip completions
+  ./scripts/install.sh --local ./se       # Install from local binary
 
 ${BLUE}After installation:${NC}
   Make sure ~/.local/bin (or your custom prefix) is in your PATH
@@ -154,6 +157,10 @@ parse_args() {
             --quiet)
                 VERBOSE=false
                 shift
+                ;;
+            --local)
+                LOCAL_FILE="$2"
+                shift 2
                 ;;
             *)
                 print_error "Unknown option: $1"
@@ -202,6 +209,49 @@ get_platform() {
             return 1
             ;;
     esac
+}
+
+install_local_file() {
+    print_header "Installing from local file"
+
+    if [[ -z "$LOCAL_FILE" ]]; then
+        print_error "No local file specified"
+        return 1
+    fi
+
+    if [[ ! -f "$LOCAL_FILE" ]]; then
+        print_error "File not found: ${LOCAL_FILE}"
+        return 1
+    fi
+
+    if [[ ! -x "$LOCAL_FILE" ]]; then
+        print_step "Making file executable..."
+        chmod +x "$LOCAL_FILE"
+    fi
+
+    print_step "Using local binary: ${LOCAL_FILE}"
+
+    # Copy to target/release for consistency
+    mkdir -p target/release
+    local basename
+    basename=$(basename "$LOCAL_FILE")
+    cp "$LOCAL_FILE" "target/release/${basename}"
+
+    # Handle both 'se' and 'ssher' names
+    if [[ "$basename" == "se"* ]]; then
+        cp "target/release/${basename}" target/release/se
+    elif [[ "$basename" == "ssher"* ]]; then
+        cp "target/release/${basename}" target/release/ssher
+        cp "target/release/ssher" target/release/se
+    else
+        # Unknown name, use as-is for se
+        mv "target/release/${basename}" target/release/se
+    fi
+
+    chmod +x target/release/se
+
+    print_success "Local binary prepared"
+    return 0
 }
 
 download_binary() {
@@ -727,8 +777,12 @@ main() {
     echo ""
     configure_rust_toolchain_env
 
+    # Handle local file installation
+    if [[ -n "$LOCAL_FILE" ]]; then
+        install_local_file
+        echo ""
     # Try to download pre-built binary first
-    if [[ "$FORCE_SOURCE" != "true" ]]; then
+    elif [[ "$FORCE_SOURCE" != "true" ]]; then
         set +e  # Temporarily disable errexit to handle return codes
         if download_binary; then
             DOWNLOAD_STATUS=0
