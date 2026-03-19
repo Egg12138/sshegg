@@ -488,7 +488,7 @@ impl SshConnection {
     }
 
     pub fn shell(&mut self) -> Result<()> {
-        use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+        use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
         use std::io::{Read, Write};
 
         let mut channel = self
@@ -496,8 +496,13 @@ impl SshConnection {
             .channel_session()
             .context("failed to open SSH channel")?;
 
+        // Get local terminal dimensions and pass to PTY request
+        let pty_dims = size()
+            .ok()
+            .map(|(cols, rows)| (cols as u32, rows as u32, 0, 0));
+
         channel
-            .request_pty("xterm-256color", None, None)
+            .request_pty("xterm-256color", None, pty_dims)
             .context("failed to request PTY")?;
 
         channel.shell().context("failed to start shell")?;
