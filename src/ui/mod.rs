@@ -4,7 +4,8 @@ pub mod highlight;
 pub mod ordering;
 mod state;
 
-use crate::model::Session;
+use crate::model::{PasswdUnsafeMode, Session};
+use crate::password;
 use crate::store::SessionStore;
 use crate::ui::state::{
     AddField, AddSessionForm, AppState, FormEditMode, InputMode, MonitorEntry, ScpDirection,
@@ -368,8 +369,6 @@ fn handle_add_session_key(
             }
             KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => form.next_field(),
             KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => form.prev_field(),
-            KeyCode::Left | KeyCode::Char('h') => form.move_cursor_left(),
-            KeyCode::Right | KeyCode::Char('l') => form.move_cursor_right(),
             KeyCode::Enter => {
                 if form.field() == AddField::Tags {
                     submit_add_session(app, store)?;
@@ -384,6 +383,24 @@ fn handle_add_session_key(
             KeyCode::Char('a') => {
                 form.enter_insert_after();
                 app.set_status("Add session [INSERT]: type text, Esc normal, Enter next/save");
+            }
+            // Handle cursor movement and password mode cycling
+            KeyCode::Left | KeyCode::Char('h') => {
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() {
+                    form.cycle_passwd_mode();
+                } else {
+                    form.move_cursor_left();
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() {
+                    form.cycle_passwd_mode();
+                } else {
+                    form.move_cursor_right();
+                }
+            }
+            KeyCode::Char(' ') if form.field() == AddField::PasswdMode && form.show_passwd_mode() => {
+                form.cycle_passwd_mode();
             }
             _ => {}
         },
@@ -447,8 +464,6 @@ fn handle_edit_session_key(
             }
             KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => form.next_field(),
             KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => form.prev_field(),
-            KeyCode::Left | KeyCode::Char('h') => form.move_cursor_left(),
-            KeyCode::Right | KeyCode::Char('l') => form.move_cursor_right(),
             KeyCode::Enter => {
                 if form.field() == AddField::Tags {
                     submit_edit_session(app, store)?;
@@ -463,6 +478,24 @@ fn handle_edit_session_key(
             KeyCode::Char('a') => {
                 form.enter_insert_after();
                 app.set_status("Edit session [INSERT]: type text, Esc normal, Enter next/save");
+            }
+            // Handle cursor movement and password mode cycling
+            KeyCode::Left | KeyCode::Char('h') => {
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() {
+                    form.cycle_passwd_mode();
+                } else {
+                    form.move_cursor_left();
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() {
+                    form.cycle_passwd_mode();
+                } else {
+                    form.move_cursor_right();
+                }
+            }
+            KeyCode::Char(' ') if form.field() == AddField::PasswdMode && form.show_passwd_mode() => {
+                form.cycle_passwd_mode();
             }
             _ => {}
         },
@@ -1025,6 +1058,13 @@ fn build_add_form_lines(form: &AddSessionForm, show_inline_caret: bool) -> Vec<S
     };
     let active_caret = Caret::new(form.edit_mode(), form.cursor(), show_inline_caret);
 
+    // Password mode label
+    let passwd_mode_label = match form.passwd_mode {
+        PasswdUnsafeMode::Normal => "normal (keyring)",
+        PasswdUnsafeMode::Bare => "bare (plaintext)",
+        PasswdUnsafeMode::Simple => "simple (XOR)",
+    };
+
     let mut lines = vec![
         field_line(
             "Name",
@@ -1056,12 +1096,30 @@ fn build_add_form_lines(form: &AddSessionForm, show_inline_caret: bool) -> Vec<S
             &password_display,
             caret_for(form, AddField::Password, active_caret),
         ),
-        field_line(
-            "Tags",
-            &form.tags,
-            caret_for(form, AddField::Tags, active_caret),
-        ),
     ];
+
+    // Only show password mode selector when password is entered
+    if form.show_passwd_mode() {
+        lines.push(field_line(
+            "Pwd Mode",
+            passwd_mode_label,
+            if form.field() == AddField::PasswdMode {
+                Some(Caret::new(
+                    FormEditMode::Insert,
+                    passwd_mode_label.chars().count(),
+                    show_inline_caret,
+                ))
+            } else {
+                None
+            },
+        ));
+    }
+
+    lines.push(field_line(
+        "Tags",
+        &form.tags,
+        caret_for(form, AddField::Tags, active_caret),
+    ));
 
     let identity_status = match form.identity_exists() {
         Some(true) => "yes",
@@ -1075,6 +1133,10 @@ fn build_add_form_lines(form: &AddSessionForm, show_inline_caret: bool) -> Vec<S
         for suggestion in form.identity_suggestions().iter().take(3) {
             lines.push(format!("    {}", suggestion));
         }
+    }
+
+    if form.show_passwd_mode() {
+        lines.push("  Space/Left/Right cycles password mode".to_string());
     }
 
     lines
@@ -1233,6 +1295,7 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     let port_input = form.port.trim().to_string();
     let identity_input = form.identity_file.trim().to_string();
     let password = form.password.clone();
+    let passwd_mode = form.passwd_mode.clone();
     let tags_input = form.tags.clone();
 
     if name.is_empty() || host.is_empty() || user.is_empty() {
@@ -1260,18 +1323,51 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
 
     let tags = split_tags(&tags_input);
 
-    // Store password in keyring if provided
+    // Handle password storage based on selected mode
     let mut password_warning: Option<String> = None;
+    let mut stored_password: Option<String> = None;
     let has_stored_password = if !password.is_empty() {
-        match try_store_password_for_ui(&name, &password)? {
-            Some(warning) => {
-                password_warning = Some(warning);
-                false
+        match passwd_mode {
+            PasswdUnsafeMode::Normal => {
+                match try_store_password_for_ui(&name, &password)? {
+                    Some(warning) => {
+                        password_warning = Some(warning);
+                        false
+                    }
+                    None => true,
+                }
             }
-            None => true,
+            PasswdUnsafeMode::Bare => {
+                stored_password = Some(password.clone());
+                true
+            }
+            PasswdUnsafeMode::Simple => {
+                let config = store.get_config()?;
+                match password::store_unsafe_password(
+                    &password,
+                    &PasswdUnsafeMode::Simple,
+                    config.passwd_unsafe_key.as_deref(),
+                ) {
+                    Ok(encoded) => {
+                        stored_password = Some(encoded);
+                        true
+                    }
+                    Err(err) => {
+                        password_warning = Some(format!("password not saved: {}", err));
+                        false
+                    }
+                }
+            }
         }
     } else {
         false
+    };
+
+    // Determine passwd_unsafe_mode field - only set if password is provided
+    let session_passwd_mode = if password.is_empty() {
+        None
+    } else {
+        Some(passwd_mode)
     };
 
     let session = Session {
@@ -1283,6 +1379,8 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
         tags,
         last_connected_at: None,
         has_stored_password,
+        passwd_unsafe_mode: session_passwd_mode,
+        stored_password,
     };
 
     if let Err(err) = store.add(session.clone()) {
@@ -1316,6 +1414,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     let port_input = form.port.trim().to_string();
     let identity_input = form.identity_file.trim().to_string();
     let password = form.password.clone();
+    let passwd_mode = form.passwd_mode.clone();
     let tags_input = form.tags.clone();
 
     if name.is_empty() || host.is_empty() || user.is_empty() {
@@ -1343,25 +1442,63 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
 
     let tags = split_tags(&tags_input);
 
+    // Get existing session for password preservation
+    let existing_session = store
+        .list()?
+        .into_iter()
+        .find(|s| s.name == original_name);
+
     // Handle password update - preserve existing if no new password provided
     let mut password_warning: Option<String> = None;
-    let has_stored_password = if !password.is_empty() {
-        match try_store_password_for_ui(&name, &password)? {
-            Some(warning) => {
-                password_warning = Some(warning);
-                false
+    let mut stored_password: Option<String> = None;
+    let (has_stored_password, session_passwd_mode) = if !password.is_empty() {
+        // New password provided - store according to selected mode
+        match passwd_mode {
+            PasswdUnsafeMode::Normal => {
+                let result = match try_store_password_for_ui(&name, &password)? {
+                    Some(warning) => {
+                        password_warning = Some(warning);
+                        false
+                    }
+                    None => true,
+                };
+                (result, None)
             }
-            None => true,
+            PasswdUnsafeMode::Bare => {
+                stored_password = Some(password.clone());
+                (true, Some(PasswdUnsafeMode::Bare))
+            }
+            PasswdUnsafeMode::Simple => {
+                let config = store.get_config()?;
+                match password::store_unsafe_password(
+                    &password,
+                    &PasswdUnsafeMode::Simple,
+                    config.passwd_unsafe_key.as_deref(),
+                ) {
+                    Ok(encoded) => {
+                        stored_password = Some(encoded);
+                        (true, Some(PasswdUnsafeMode::Simple))
+                    }
+                    Err(err) => {
+                        password_warning = Some(format!("password not saved: {}", err));
+                        (false, None)
+                    }
+                }
+            }
         }
     } else {
-        // Preserve existing password status when editing
-        store
-            .list()?
-            .iter()
-            .find(|s| s.name == original_name)
-            .map(|s| s.has_stored_password)
-            .unwrap_or(false)
+        // No new password - preserve existing
+        if let Some(ref existing) = existing_session {
+            (existing.has_stored_password, existing.passwd_unsafe_mode.clone())
+        } else {
+            (false, None)
+        }
     };
+
+    // Preserve stored_password from existing session if not updating
+    if password.is_empty() {
+        stored_password = existing_session.and_then(|s| s.stored_password);
+    }
 
     let session = Session {
         name: name.clone(),
@@ -1372,6 +1509,8 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
         tags,
         last_connected_at: None,
         has_stored_password,
+        passwd_unsafe_mode: session_passwd_mode,
+        stored_password,
     };
 
     if let Err(err) = store.update(session.clone()) {

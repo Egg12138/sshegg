@@ -2,11 +2,12 @@ mod output;
 mod theme;
 mod theme_cmd;
 
+use crate::model::PasswdUnsafeMode;
 use crate::ssh::{AuthConfig, SshConnection};
 
 use crate::model::Session;
 use crate::password;
-use crate::store::{JsonFileStore, resolve_store_path};
+use crate::store::{JsonFileStore, StoreConfig, resolve_store_path};
 use crate::ui;
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -45,6 +46,7 @@ enum Commands {
     Scp(ScpArgs),
     Completions(CompletionsArgs),
     Theme(ThemeArgs),
+    Config(ConfigArgs),
 }
 
 #[derive(Args)]
@@ -70,6 +72,27 @@ struct AddArgs {
     password: bool,
     #[arg(long = "no-password")]
     no_password: bool,
+    /// Password storage mode: normal (keyring), bare (plaintext), simple (XOR encoded)
+    #[arg(long, value_name = "MODE", value_enum)]
+    passwd_mode: Option<PasswdModeArg>,
+}
+
+/// CLI-friendly password mode enum
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
+enum PasswdModeArg {
+    Normal,
+    Bare,
+    Simple,
+}
+
+impl From<PasswdModeArg> for PasswdUnsafeMode {
+    fn from(value: PasswdModeArg) -> Self {
+        match value {
+            PasswdModeArg::Normal => PasswdUnsafeMode::Normal,
+            PasswdModeArg::Bare => PasswdUnsafeMode::Bare,
+            PasswdModeArg::Simple => PasswdUnsafeMode::Simple,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -113,6 +136,9 @@ struct UpdateArgs {
     password: bool,
     #[arg(long = "no-password")]
     no_password: bool,
+    /// Password storage mode: normal (keyring), bare (plaintext), simple (XOR encoded)
+    #[arg(long, value_name = "MODE", value_enum)]
+    passwd_mode: Option<PasswdModeArg>,
 }
 
 #[derive(Args)]
@@ -205,6 +231,30 @@ enum ThemeCommand {
     Current,
 }
 
+#[derive(Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    command: ConfigCommand,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Set a configuration value
+    Set {
+        /// Configuration key (passwd_unsafe_mode, passwd_unsafe_key)
+        key: String,
+        /// Configuration value
+        value: String,
+    },
+    /// Get a configuration value
+    Get {
+        /// Configuration key (passwd_unsafe_mode, passwd_unsafe_key)
+        key: String,
+    },
+    /// Show all configuration values
+    List,
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -232,6 +282,7 @@ pub fn run() -> Result<()> {
                 Some(Commands::Go(args)) => run_go(&store, args),
                 Some(Commands::Scp(args)) => run_scp(&store, args),
                 Some(Commands::Theme(args)) => handle_theme_command(args),
+                Some(Commands::Config(args)) => handle_config_command(&store, args),
                 Some(Commands::Completions(_)) => unreachable!(),
             }
         }
@@ -240,7 +291,7 @@ pub fn run() -> Result<()> {
 
 fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
     let mut session = Session {
-        name: args.name,
+        name: args.name.clone(),
         host: args.host,
         user: args.user,
         port: args.port,
@@ -248,6 +299,8 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
         tags: normalize_tags(args.tags),
         last_connected_at: None,
         has_stored_password: false,
+        passwd_unsafe_mode: None,
+        stored_password: None,
     };
 
     if args.password && args.no_password {
@@ -258,7 +311,34 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
         session.has_stored_password = false;
     } else if args.password {
         let pwd = rpassword::prompt_password(format!("Enter password for {}: ", session.name))?;
-        session.has_stored_password = try_store_password(&session.name, &pwd)?;
+
+        // Determine effective password mode
+        let config = store.get_config()?;
+        let effective_mode = args
+            .passwd_mode
+            .map(|m| m.into())
+            .unwrap_or(config.passwd_unsafe_mode);
+
+        session.passwd_unsafe_mode = args.passwd_mode.map(|m| m.into());
+
+        match effective_mode {
+            PasswdUnsafeMode::Normal => {
+                session.has_stored_password = try_store_password(&session.name, &pwd)?;
+            }
+            PasswdUnsafeMode::Bare => {
+                session.stored_password = Some(pwd);
+                session.has_stored_password = true;
+            }
+            PasswdUnsafeMode::Simple => {
+                let encoded = password::store_unsafe_password(
+                    &pwd,
+                    &PasswdUnsafeMode::Simple,
+                    config.passwd_unsafe_key.as_deref(),
+                )?;
+                session.stored_password = Some(encoded);
+                session.has_stored_password = true;
+            }
+        }
     }
 
     store.add(session.clone())?;
@@ -506,6 +586,8 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
                         tags: vec![],
                         last_connected_at: None,
                         has_stored_password: false,
+                        passwd_unsafe_mode: None,
+                        stored_password: None,
                     });
                 }
                 current_host = Some(value.to_string());
@@ -542,6 +624,8 @@ fn import_from_ssh_config(content: &str) -> Result<Vec<Session>> {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         });
     }
 
@@ -566,7 +650,23 @@ fn remove_password(store: &JsonFileStore, name: &str) -> Result<()> {
         return Ok(());
     }
 
-    password::delete_password(name)?;
+    // Determine the effective mode to know where to delete from
+    let config = store.get_config()?;
+    let effective_mode = session
+        .passwd_unsafe_mode
+        .as_ref()
+        .unwrap_or(&config.passwd_unsafe_mode);
+
+    match effective_mode {
+        PasswdUnsafeMode::Normal => {
+            password::delete_password(name)?;
+        }
+        PasswdUnsafeMode::Bare | PasswdUnsafeMode::Simple => {
+            // Just clear the stored_password field
+            session.stored_password = None;
+        }
+    }
+
     session.has_stored_password = false;
     store.update(session.clone())?;
     println!("Removed password for session: {}", name);
@@ -618,12 +718,62 @@ fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
 
     if args.no_password {
         // Remove stored password
-        password::delete_password(&args.name)?;
+        let config = store.get_config()?;
+        let effective_mode = session
+            .passwd_unsafe_mode
+            .as_ref()
+            .unwrap_or(&config.passwd_unsafe_mode);
+
+        match effective_mode {
+            PasswdUnsafeMode::Normal => {
+                password::delete_password(&args.name)?;
+            }
+            PasswdUnsafeMode::Bare | PasswdUnsafeMode::Simple => {
+                session.stored_password = None;
+            }
+        }
         session.has_stored_password = false;
     } else if args.password {
         // Update stored password
         let pwd = rpassword::prompt_password(format!("Enter new password for {}: ", args.name))?;
-        session.has_stored_password = try_store_password(&args.name, &pwd)?;
+
+        // Determine effective password mode
+        let config = store.get_config()?;
+        let effective_mode = args
+            .passwd_mode
+            .map(|m| m.into())
+            .unwrap_or_else(|| {
+                session
+                    .passwd_unsafe_mode
+                    .clone()
+                    .unwrap_or(config.passwd_unsafe_mode.clone())
+            });
+
+        // Update session's passwd_unsafe_mode if specified
+        if args.passwd_mode.is_some() {
+            session.passwd_unsafe_mode = args.passwd_mode.map(|m| m.into());
+        }
+
+        match effective_mode {
+            PasswdUnsafeMode::Normal => {
+                session.has_stored_password = try_store_password(&args.name, &pwd)?;
+                // Clear any previously stored unsafe password
+                session.stored_password = None;
+            }
+            PasswdUnsafeMode::Bare => {
+                session.stored_password = Some(pwd);
+                session.has_stored_password = true;
+            }
+            PasswdUnsafeMode::Simple => {
+                let encoded = password::store_unsafe_password(
+                    &pwd,
+                    &PasswdUnsafeMode::Simple,
+                    config.passwd_unsafe_key.as_deref(),
+                )?;
+                session.stored_password = Some(encoded);
+                session.has_stored_password = true;
+            }
+        }
     }
 
     store.update(session.clone())?;
@@ -658,6 +808,42 @@ fn auth_config_for_session(session: &Session) -> AuthConfig {
         no_password: false,
         allow_manual_password_prompt: true,
         session_name: Some(session.name.clone()),
+    }
+}
+
+/// Get the password for a session, considering the storage mode
+fn get_session_password(
+    store: &JsonFileStore,
+    session: &Session,
+) -> Result<Option<String>> {
+    if !session.has_stored_password {
+        return Ok(None);
+    }
+
+    let config = store.get_config()?;
+    let effective_mode = session
+        .passwd_unsafe_mode
+        .as_ref()
+        .unwrap_or(&config.passwd_unsafe_mode);
+
+    match effective_mode {
+        PasswdUnsafeMode::Normal => password::get_password(&session.name),
+        PasswdUnsafeMode::Bare => {
+            Ok(session.stored_password.clone())
+        }
+        PasswdUnsafeMode::Simple => {
+            match &session.stored_password {
+                Some(encoded) => {
+                    password::get_unsafe_password(
+                        encoded,
+                        &PasswdUnsafeMode::Simple,
+                        config.passwd_unsafe_key.as_deref(),
+                    )
+                    .map(Some)
+                }
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -732,5 +918,91 @@ fn handle_theme_command(args: ThemeArgs) -> Result<()> {
         ThemeCommand::ApplyUi { name } => theme_cmd::apply_ui_theme_cmd(&name),
         ThemeCommand::Apply { name } => theme_cmd::apply_theme_cmd(&name),
         ThemeCommand::Current => theme_cmd::current_theme_cmd(),
+    }
+}
+
+fn handle_config_command(store: &JsonFileStore, args: ConfigArgs) -> Result<()> {
+    match args.command {
+        ConfigCommand::Set { key, value } => {
+            let mut config = store.get_config()?;
+            match key.as_str() {
+                "passwd_unsafe_mode" => {
+                    let mode = match value.to_lowercase().as_str() {
+                        "normal" => PasswdUnsafeMode::Normal,
+                        "bare" => PasswdUnsafeMode::Bare,
+                        "simple" => PasswdUnsafeMode::Simple,
+                        _ => {
+                            return Err(anyhow!(
+                                "Invalid value '{}' for passwd_unsafe_mode. Valid values: normal, bare, simple",
+                                value
+                            ))
+                        }
+                    };
+                    config.passwd_unsafe_mode = mode;
+                }
+                "passwd_unsafe_key" => {
+                    config.passwd_unsafe_key = Some(value.clone());
+                    println!("Set {} = {}", key, value);
+                    return store.set_config(&config);
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unknown config key '{}'. Valid keys: passwd_unsafe_mode, passwd_unsafe_key",
+                        key
+                    ))
+                }
+            }
+            store.set_config(&config)?;
+            println!("Set {} = {}", key, value);
+            Ok(())
+        }
+        ConfigCommand::Get { key } => {
+            let config = store.get_config()?;
+            match key.as_str() {
+                "passwd_unsafe_mode" => {
+                    println!(
+                        "{}",
+                        match config.passwd_unsafe_mode {
+                            PasswdUnsafeMode::Normal => "normal",
+                            PasswdUnsafeMode::Bare => "bare",
+                            PasswdUnsafeMode::Simple => "simple",
+                        }
+                    );
+                }
+                "passwd_unsafe_key" => {
+                    match &config.passwd_unsafe_key {
+                        Some(key) => {
+                            // Mask the key for security - show length indicator
+                            println!("{} (length: {} chars)", "*".repeat(8), key.len());
+                        }
+                        None => println!("<not set>"),
+                    }
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unknown config key '{}'. Valid keys: passwd_unsafe_mode, passwd_unsafe_key",
+                        key
+                    ))
+                }
+            }
+            Ok(())
+        }
+        ConfigCommand::List => {
+            let config = store.get_config()?;
+            println!("passwd_unsafe_mode: {}", match config.passwd_unsafe_mode {
+                PasswdUnsafeMode::Normal => "normal",
+                PasswdUnsafeMode::Bare => "bare",
+                PasswdUnsafeMode::Simple => "simple",
+            });
+            match &config.passwd_unsafe_key {
+                Some(key) => {
+                    println!("passwd_unsafe_key: {} (length: {} chars)", "*".repeat(8), key.len());
+                }
+                None => {
+                    println!("passwd_unsafe_key: <not set>");
+                }
+            }
+            Ok(())
+        }
     }
 }

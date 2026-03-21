@@ -49,6 +49,8 @@ mod tests {
             tags: vec![],
             last_connected_at: ts,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         }
     }
 

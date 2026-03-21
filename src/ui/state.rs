@@ -1,4 +1,4 @@
-use crate::model::Session;
+use crate::model::{PasswdUnsafeMode, Session};
 use crate::ui::filter::filter_sessions;
 use std::time::{Duration, Instant};
 
@@ -389,6 +389,7 @@ pub enum AddField {
     Port,
     Identity,
     Password,
+    PasswdMode,
     Tags,
 }
 
@@ -400,7 +401,8 @@ impl AddField {
             AddField::User => AddField::Port,
             AddField::Port => AddField::Identity,
             AddField::Identity => AddField::Password,
-            AddField::Password => AddField::Tags,
+            AddField::Password => AddField::PasswdMode,
+            AddField::PasswdMode => AddField::Tags,
             AddField::Tags => AddField::Name,
         }
     }
@@ -413,7 +415,8 @@ impl AddField {
             AddField::Port => AddField::User,
             AddField::Identity => AddField::Port,
             AddField::Password => AddField::Identity,
-            AddField::Tags => AddField::Password,
+            AddField::PasswdMode => AddField::Password,
+            AddField::Tags => AddField::PasswdMode,
         }
     }
 }
@@ -440,6 +443,7 @@ pub struct AddSessionForm {
     pub port: String,
     pub identity_file: String,
     pub password: String,
+    pub passwd_mode: PasswdUnsafeMode,
     pub tags: String,
     field: AddField,
     edit_mode: FormEditMode,
@@ -457,6 +461,7 @@ impl AddSessionForm {
             port: "22".to_string(),
             identity_file: String::new(),
             password: String::new(),
+            passwd_mode: PasswdUnsafeMode::Normal,
             tags: String::new(),
             field: AddField::Name,
             edit_mode,
@@ -480,6 +485,7 @@ impl AddSessionForm {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             password: String::new(), // Don't load existing password
+            passwd_mode: session.passwd_unsafe_mode.clone().unwrap_or(PasswdUnsafeMode::Normal),
             tags: session.tags.join(","),
             field: AddField::Name,
             edit_mode,
@@ -576,6 +582,7 @@ impl AddSessionForm {
             AddField::Port => &mut self.port,
             AddField::Identity => &mut self.identity_file,
             AddField::Password => &mut self.password,
+            AddField::PasswdMode => &mut self.password, // Not editable directly
             AddField::Tags => &mut self.tags,
         }
     }
@@ -601,8 +608,23 @@ impl AddSessionForm {
             AddField::Port => &self.port,
             AddField::Identity => &self.identity_file,
             AddField::Password => &self.password,
+            AddField::PasswdMode => "", // Not a text field
             AddField::Tags => &self.tags,
         }
+    }
+
+    /// Cycle to the next password mode
+    pub fn cycle_passwd_mode(&mut self) {
+        self.passwd_mode = match self.passwd_mode {
+            PasswdUnsafeMode::Normal => PasswdUnsafeMode::Bare,
+            PasswdUnsafeMode::Bare => PasswdUnsafeMode::Simple,
+            PasswdUnsafeMode::Simple => PasswdUnsafeMode::Normal,
+        };
+    }
+
+    /// Check if password mode field should be shown (only when password is entered)
+    pub fn show_passwd_mode(&self) -> bool {
+        !self.password.is_empty()
     }
 
     fn clamp_cursor(&mut self) {
@@ -738,6 +760,8 @@ mod tests {
             tags: vec!["prod".to_string()],
             last_connected_at: None,
             has_stored_password: true,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         }
     }
 

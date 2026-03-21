@@ -14,6 +14,8 @@ fn test_sort_sessions_latest_first() {
             tags: vec![],
             last_connected_at: Some(100),
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         },
         Session {
             name: "new".to_string(),
@@ -24,6 +26,8 @@ fn test_sort_sessions_latest_first() {
             tags: vec![],
             last_connected_at: Some(200),
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         },
     ];
 
@@ -51,6 +55,8 @@ fn test_session_highlight_classify() {
         tags: vec![],
         last_connected_at: Some(now - 3600),
         has_stored_password: false,
+        passwd_unsafe_mode: None,
+        stored_password: None,
     };
     assert_eq!(
         SessionHighlight::classify(&hot_session, 7),
@@ -67,6 +73,8 @@ fn test_session_highlight_classify() {
         tags: vec![],
         last_connected_at: Some(now - (3 * 24 * 3600)),
         has_stored_password: false,
+        passwd_unsafe_mode: None,
+        stored_password: None,
     };
     assert_eq!(
         SessionHighlight::classify(&normal_session, 7),
@@ -83,6 +91,8 @@ fn test_session_highlight_classify() {
         tags: vec![],
         last_connected_at: Some(now - (10 * 24 * 3600)),
         has_stored_password: false,
+        passwd_unsafe_mode: None,
+        stored_password: None,
     };
     assert_eq!(
         SessionHighlight::classify(&dying_session, 7),

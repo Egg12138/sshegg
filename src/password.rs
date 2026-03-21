@@ -1,10 +1,19 @@
 //! Password management using system keyring
 //! Cross-platform: libsecret (Linux), Keychain (macOS), Credential Manager (Windows)
+//!
+//! Also supports unsafe password storage modes for environments where keyring is unavailable:
+//! - `bare`: Store password as plaintext in session file
+//! - `simple`: Store password with XOR encoding using a configurable key
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use keyring::{Entry, Error as KeyringError};
+use std::env;
+
+use crate::model::PasswdUnsafeMode;
 
 const SERVICE_NAME: &str = "ssher";
+const UNSAFE_KEY_ENV_VAR: &str = "SSHER_UNSAFE_KEY";
 
 fn keyring_hint(err: &KeyringError) -> Option<&'static str> {
     #[cfg(target_os = "linux")]
@@ -100,6 +109,112 @@ pub fn delete_password(session_name: &str) -> Result<()> {
 #[allow(dead_code)]
 pub fn has_password(session_name: &str) -> Result<bool> {
     get_password(session_name).map(|p| p.is_some())
+}
+
+// ============================================================================
+// Unsafe Password Storage (for environments without keyring support)
+// ============================================================================
+
+/// Get the encryption key for "simple" mode.
+/// Resolution order: SSHER_UNSAFE_KEY env var → passwd_unsafe_key from config
+pub fn get_encryption_key(config_key: Option<&str>) -> Result<String> {
+    // First check environment variable
+    if let Ok(key) = env::var(UNSAFE_KEY_ENV_VAR) {
+        if !key.is_empty() {
+            return Ok(key);
+        }
+    }
+
+    // Fall back to config key
+    config_key
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!(
+            "No encryption key set. Set {} environment variable or passwd_unsafe_key in config.",
+            UNSAFE_KEY_ENV_VAR
+        ))
+}
+
+/// XOR encode a password with a key, then base64 encode for safe JSON storage
+pub fn xor_encode(password: &str, key: &str) -> String {
+    let password_bytes = password.as_bytes();
+    let key_bytes = key.as_bytes();
+    let result: Vec<u8> = password_bytes
+        .iter()
+        .zip(key_bytes.iter().cycle())
+        .map(|(p, k)| p ^ k)
+        .collect();
+    BASE64_STANDARD.encode(&result)
+}
+
+/// Decode a XOR-encoded password (base64 decode, then XOR decode)
+pub fn xor_decode(encoded: &str, key: &str) -> Result<String> {
+    let bytes = BASE64_STANDARD
+        .decode(encoded)
+        .context("failed to decode base64 password")?;
+    let key_bytes = key.as_bytes();
+    let result: Vec<u8> = bytes
+        .iter()
+        .zip(key_bytes.iter().cycle())
+        .map(|(p, k)| p ^ k)
+        .collect();
+    String::from_utf8(result).context("decoded password is not valid UTF-8")
+}
+
+/// Store password using the specified unsafe mode
+pub fn store_unsafe_password(
+    password: &str,
+    mode: &PasswdUnsafeMode,
+    config_key: Option<&str>,
+) -> Result<String> {
+    match mode {
+        PasswdUnsafeMode::Normal => {
+            anyhow::bail!("store_unsafe_password called with Normal mode - use store_password instead")
+        }
+        PasswdUnsafeMode::Bare => {
+            // Store as plaintext
+            Ok(password.to_string())
+        }
+        PasswdUnsafeMode::Simple => {
+            // XOR encode with key
+            let key = get_encryption_key(config_key)?;
+            Ok(xor_encode(password, &key))
+        }
+    }
+}
+
+/// Retrieve password stored in unsafe mode
+pub fn get_unsafe_password(
+    stored_password: &str,
+    mode: &PasswdUnsafeMode,
+    config_key: Option<&str>,
+) -> Result<String> {
+    match mode {
+        PasswdUnsafeMode::Normal => {
+            anyhow::bail!("get_unsafe_password called with Normal mode - use get_password instead")
+        }
+        PasswdUnsafeMode::Bare => {
+            // Read plaintext directly
+            Ok(stored_password.to_string())
+        }
+        PasswdUnsafeMode::Simple => {
+            // XOR decode with key
+            let key = get_encryption_key(config_key)?;
+            xor_decode(stored_password, &key)
+        }
+    }
+}
+
+/// Re-encode a password from one unsafe mode to another
+pub fn reencode_password(
+    stored_password: &str,
+    from_mode: &PasswdUnsafeMode,
+    to_mode: &PasswdUnsafeMode,
+    config_key: Option<&str>,
+) -> Result<String> {
+    // First decode from source mode
+    let plain_password = get_unsafe_password(stored_password, from_mode, config_key)?;
+    // Then encode to target mode
+    store_unsafe_password(&plain_password, to_mode, config_key)
 }
 
 #[cfg(test)]
@@ -266,5 +381,165 @@ mod tests {
             KeyringError::Invalid("target".to_string(), "bad target".to_string()),
         );
         assert!(!is_backend_unavailable_error(&err));
+    }
+
+    // ===== Unsafe Password Storage Tests =====
+
+    #[test]
+    fn xor_encode_produces_base64_output() {
+        let password = "my-secret-password";
+        let key = "encryption-key";
+        let encoded = xor_encode(password, key);
+
+        // Should be valid base64
+        assert!(BASE64_STANDARD.decode(&encoded).is_ok());
+        // Should not contain the original password
+        assert!(!encoded.contains(password));
+    }
+
+    #[test]
+    fn xor_decode_reverses_encoding() {
+        let password = "my-secret-password";
+        let key = "encryption-key";
+        let encoded = xor_encode(password, key);
+        let decoded = xor_decode(&encoded, key).unwrap();
+        assert_eq!(decoded, password);
+    }
+
+    #[test]
+    fn xor_with_different_keys_gives_different_results() {
+        let password = "my-secret-password";
+        let key1 = "key1";
+        let key2 = "key2";
+
+        let encoded1 = xor_encode(password, key1);
+        let encoded2 = xor_encode(password, key2);
+
+        // Different keys should produce different encoded values
+        assert_ne!(encoded1, encoded2);
+    }
+
+    #[test]
+    fn xor_decode_with_wrong_key_gives_wrong_result() {
+        let password = "my-secret-password";
+        let encode_key = "correct-key";
+        let decode_key = "wrong-key";
+
+        let encoded = xor_encode(password, encode_key);
+        let decoded = xor_decode(&encoded, decode_key).unwrap();
+
+        // Decoding with wrong key should NOT give original password
+        assert_ne!(decoded, password);
+    }
+
+    #[test]
+    fn store_unsafe_password_bare_returns_plaintext() {
+        let password = "my-secret";
+        let stored = store_unsafe_password(password, &PasswdUnsafeMode::Bare, None).unwrap();
+        assert_eq!(stored, password);
+    }
+
+    #[test]
+    fn store_unsafe_password_simple_encodes() {
+        let password = "my-secret";
+        let stored = store_unsafe_password(password, &PasswdUnsafeMode::Simple, Some("my-key")).unwrap();
+
+        // Should not be plaintext
+        assert_ne!(stored, password);
+        // Should be decodable
+        let decoded = xor_decode(&stored, "my-key").unwrap();
+        assert_eq!(decoded, password);
+    }
+
+    #[test]
+    fn store_unsafe_password_simple_requires_key() {
+        let result = store_unsafe_password("secret", &PasswdUnsafeMode::Simple, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No encryption key set"));
+    }
+
+    #[test]
+    fn get_unsafe_password_bare_returns_plaintext() {
+        let stored = "my-secret";
+        let retrieved = get_unsafe_password(stored, &PasswdUnsafeMode::Bare, None).unwrap();
+        assert_eq!(retrieved, stored);
+    }
+
+    #[test]
+    fn get_unsafe_password_simple_decodes() {
+        let password = "my-secret";
+        let key = "my-key";
+        let encoded = xor_encode(password, key);
+
+        let retrieved = get_unsafe_password(&encoded, &PasswdUnsafeMode::Simple, Some(key)).unwrap();
+        assert_eq!(retrieved, password);
+    }
+
+    #[test]
+    fn get_unsafe_password_simple_requires_key() {
+        let encoded = xor_encode("secret", "some-key");
+        let result = get_unsafe_password(&encoded, &PasswdUnsafeMode::Simple, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No encryption key set"));
+    }
+
+    #[test]
+    fn reencode_password_from_bare_to_simple() {
+        let plain_password = "my-secret";
+        let key = "my-key";
+
+        let reencoded = reencode_password(
+            plain_password,
+            &PasswdUnsafeMode::Bare,
+            &PasswdUnsafeMode::Simple,
+            Some(key),
+        ).unwrap();
+
+        // Should be different from plaintext
+        assert_ne!(reencoded, plain_password);
+        // Should decode back to original
+        let decoded = xor_decode(&reencoded, key).unwrap();
+        assert_eq!(decoded, plain_password);
+    }
+
+    #[test]
+    fn reencode_password_from_simple_to_bare() {
+        let plain_password = "my-secret";
+        let key = "my-key";
+        let encoded = xor_encode(plain_password, key);
+
+        let reencoded = reencode_password(
+            &encoded,
+            &PasswdUnsafeMode::Simple,
+            &PasswdUnsafeMode::Bare,
+            Some(key),
+        ).unwrap();
+
+        // Should be plaintext
+        assert_eq!(reencoded, plain_password);
+    }
+
+    #[test]
+    fn get_encryption_key_uses_env_var() {
+        temp_env::with_var(UNSAFE_KEY_ENV_VAR, Some("env-key"), || {
+            let key = get_encryption_key(Some("config-key")).unwrap();
+            assert_eq!(key, "env-key");
+        });
+    }
+
+    #[test]
+    fn get_encryption_key_falls_back_to_config() {
+        temp_env::with_var(UNSAFE_KEY_ENV_VAR, Option::<&str>::None, || {
+            let key = get_encryption_key(Some("config-key")).unwrap();
+            assert_eq!(key, "config-key");
+        });
+    }
+
+    #[test]
+    fn get_encryption_key_errors_when_none_set() {
+        temp_env::with_var(UNSAFE_KEY_ENV_VAR, Option::<&str>::None, || {
+            let result = get_encryption_key(None);
+            assert!(result.is_err());
+        });
     }
 }

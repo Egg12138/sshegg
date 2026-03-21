@@ -1,6 +1,6 @@
 mod path;
 
-use crate::model::Session;
+use crate::model::{PasswdUnsafeMode, Session, SessionStoreData};
 use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::path::PathBuf;
@@ -13,6 +13,24 @@ pub trait SessionStore {
     fn list(&self) -> Result<Vec<Session>>;
     fn remove(&self, name: &str) -> Result<()>;
     fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()>;
+    fn get_config(&self) -> Result<StoreConfig>;
+    fn set_config(&self, config: &StoreConfig) -> Result<()>;
+}
+
+/// Configuration values that can be read/modified at the store level
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreConfig {
+    pub passwd_unsafe_mode: PasswdUnsafeMode,
+    pub passwd_unsafe_key: Option<String>,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            passwd_unsafe_mode: PasswdUnsafeMode::Normal,
+            passwd_unsafe_key: None,
+        }
+    }
 }
 
 pub struct JsonFileStore {
@@ -25,47 +43,44 @@ impl JsonFileStore {
     }
 
     pub fn add(&self, session: Session) -> Result<()> {
-        let mut sessions = self.load()?;
-        if sessions
-            .iter()
-            .any(|existing| existing.name == session.name)
-        {
+        let mut data = self.load_full()?;
+        if data.sessions.iter().any(|existing| existing.name == session.name) {
             return Err(anyhow!("session '{}' already exists", session.name));
         }
-        sessions.push(session);
-        self.save(&sessions)
+        data.sessions.push(session);
+        self.save(&data)
     }
 
     pub fn update(&self, session: Session) -> Result<()> {
-        let mut sessions = self.load()?;
-        if let Some(existing) = sessions.iter_mut().find(|s| s.name == session.name) {
+        let mut data = self.load_full()?;
+        if let Some(existing) = data.sessions.iter_mut().find(|s| s.name == session.name) {
             *existing = session;
-            self.save(&sessions)
+            self.save(&data)
         } else {
             Err(anyhow!("session '{}' not found", session.name))
         }
     }
 
     pub fn list(&self) -> Result<Vec<Session>> {
-        let mut sessions = self.load()?;
-        sessions.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(sessions)
+        let mut data = self.load_full()?;
+        data.sessions.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(data.sessions)
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
-        let mut sessions = self.load()?;
-        let before = sessions.len();
-        sessions.retain(|session| session.name != name);
-        if sessions.len() == before {
+        let mut data = self.load_full()?;
+        let before = data.sessions.len();
+        data.sessions.retain(|session| session.name != name);
+        if data.sessions.len() == before {
             return Err(anyhow!("session '{}' not found", name));
         }
-        self.save(&sessions)
+        self.save(&data)
     }
 
     pub fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()> {
-        let mut sessions = self.load()?;
+        let mut data = self.load_full()?;
         let mut found = false;
-        for session in &mut sessions {
+        for session in &mut data.sessions {
             if session.name == name {
                 session.last_connected_at = Some(timestamp);
                 found = true;
@@ -75,34 +90,66 @@ impl JsonFileStore {
         if !found {
             return Err(anyhow!("session '{}' not found", name));
         }
-        self.save(&sessions)
+        self.save(&data)
     }
 
-    fn load(&self) -> Result<Vec<Session>> {
+    /// Load the full store data including config
+    fn load_full(&self) -> Result<SessionStoreData> {
         if !self.path.exists() {
-            return Ok(Vec::new());
+            return Ok(SessionStoreData::default());
         }
         let data = fs::read_to_string(&self.path)
             .with_context(|| format!("unable to read store {}", self.path.display()))?;
         if data.trim().is_empty() {
-            return Ok(Vec::new());
+            return Ok(SessionStoreData::default());
         }
-        let sessions = serde_json::from_str(&data)
+
+        // Try to parse as new format first
+        let parsed: serde_json::Value = serde_json::from_str(&data)
             .with_context(|| format!("unable to parse store {}", self.path.display()))?;
-        Ok(sessions)
+
+        // Check if it's the new format (has "sessions" key at root)
+        if let Some(obj) = parsed.as_object() {
+            if obj.contains_key("sessions") {
+                let store_data: SessionStoreData = serde_json::from_value(parsed)
+                    .with_context(|| format!("unable to parse store {}", self.path.display()))?;
+                return Ok(store_data);
+            }
+        }
+
+        // Old format: root is an array of sessions - migrate it
+        let sessions: Vec<Session> = serde_json::from_str(&data)
+            .with_context(|| format!("unable to parse store {}", self.path.display()))?;
+        Ok(SessionStoreData::from_sessions(sessions))
     }
 
-    fn save(&self, sessions: &[Session]) -> Result<()> {
+    fn save(&self, data: &SessionStoreData) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("unable to create store directory {}", parent.display())
             })?;
         }
-        let data =
-            serde_json::to_string_pretty(sessions).context("unable to serialize sessions")?;
-        fs::write(&self.path, data)
+        let json = serde_json::to_string_pretty(data).context("unable to serialize sessions")?;
+        fs::write(&self.path, json)
             .with_context(|| format!("unable to write store {}", self.path.display()))?;
         Ok(())
+    }
+
+    /// Get the current config
+    pub fn get_config(&self) -> Result<StoreConfig> {
+        let data = self.load_full()?;
+        Ok(StoreConfig {
+            passwd_unsafe_mode: data.passwd_unsafe_mode,
+            passwd_unsafe_key: data.passwd_unsafe_key,
+        })
+    }
+
+    /// Update the config
+    pub fn set_config(&self, config: &StoreConfig) -> Result<()> {
+        let mut data = self.load_full()?;
+        data.passwd_unsafe_mode = config.passwd_unsafe_mode.clone();
+        data.passwd_unsafe_key = config.passwd_unsafe_key.clone();
+        self.save(&data)
     }
 }
 
@@ -126,12 +173,21 @@ impl SessionStore for JsonFileStore {
     fn touch_last_connected(&self, name: &str, timestamp: i64) -> Result<()> {
         JsonFileStore::touch_last_connected(self, name, timestamp)
     }
+
+    fn get_config(&self) -> Result<StoreConfig> {
+        JsonFileStore::get_config(self)
+    }
+
+    fn set_config(&self, config: &StoreConfig) -> Result<()> {
+        JsonFileStore::set_config(self, config)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::JsonFileStore;
-    use crate::model::Session;
+    use super::StoreConfig;
+    use crate::model::{PasswdUnsafeMode, Session};
     use tempfile::tempdir;
 
     fn sample_session(name: &str) -> Session {
@@ -144,6 +200,8 @@ mod tests {
             tags: Vec::new(),
             last_connected_at: None,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         }
     }
 
@@ -333,5 +391,98 @@ mod tests {
         assert_eq!(office.host, "newhost.example.com");
         let home = list.iter().find(|s| s.name == "home").expect("home");
         assert_eq!(home.host, "example.com");
+    }
+
+    #[test]
+    fn get_config_returns_default_for_new_store() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        let config = store.get_config().expect("get_config");
+        assert_eq!(config.passwd_unsafe_mode, PasswdUnsafeMode::Normal);
+        assert!(config.passwd_unsafe_key.is_none());
+    }
+
+    #[test]
+    fn set_config_updates_store() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        let config = StoreConfig {
+            passwd_unsafe_mode: PasswdUnsafeMode::Bare,
+            passwd_unsafe_key: Some("my-key".to_string()),
+        };
+        store.set_config(&config).expect("set_config");
+
+        let loaded = store.get_config().expect("get_config");
+        assert_eq!(loaded.passwd_unsafe_mode, PasswdUnsafeMode::Bare);
+        assert_eq!(loaded.passwd_unsafe_key, Some("my-key".to_string()));
+    }
+
+    #[test]
+    fn migrates_old_array_format() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+
+        // Write old format (array at root)
+        let old_format = r#"[{"name":"office","host":"example.com","user":"me","port":22}]"#;
+        std::fs::write(&store_path, old_format).expect("write");
+
+        let store = JsonFileStore::new(store_path);
+        let list = store.list().expect("list");
+
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "office");
+
+        // Config should be default
+        let config = store.get_config().expect("get_config");
+        assert_eq!(config.passwd_unsafe_mode, PasswdUnsafeMode::Normal);
+    }
+
+    #[test]
+    fn saves_new_format_with_config() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path.clone());
+
+        // Set config
+        let config = StoreConfig {
+            passwd_unsafe_mode: PasswdUnsafeMode::Simple,
+            passwd_unsafe_key: Some("secret".to_string()),
+        };
+        store.set_config(&config).expect("set_config");
+
+        // Add session
+        store.add(sample_session("office")).expect("add");
+
+        // Read raw file and verify format
+        let content = std::fs::read_to_string(&store_path).expect("read");
+        assert!(content.contains(r#""passwd_unsafe_mode": "simple""#));
+        assert!(content.contains(r#""passwd_unsafe_key": "secret""#));
+        assert!(content.contains(r#""sessions""#));
+        assert!(content.contains(r#""name": "office""#));
+    }
+
+    #[test]
+    fn config_persists_across_operations() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("sessions.json");
+        let store = JsonFileStore::new(store_path);
+
+        // Set config
+        let config = StoreConfig {
+            passwd_unsafe_mode: PasswdUnsafeMode::Bare,
+            passwd_unsafe_key: None,
+        };
+        store.set_config(&config).expect("set_config");
+
+        // Add session
+        store.add(sample_session("office")).expect("add");
+
+        // Config should still be the same
+        let loaded = store.get_config().expect("get_config");
+        assert_eq!(loaded.passwd_unsafe_mode, PasswdUnsafeMode::Bare);
     }
 }

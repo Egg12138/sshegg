@@ -1,6 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Password storage mode for unsafe environments where keyring is unavailable
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PasswdUnsafeMode {
+    /// Use system keyring (default, existing behavior)
+    #[default]
+    Normal,
+    /// Store password as plaintext in session file
+    Bare,
+    /// Store password with XOR encoding using a configurable key
+    Simple,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct AuthStatus {
@@ -23,6 +36,12 @@ pub struct Session {
     pub last_connected_at: Option<i64>,
     #[serde(default, skip_serializing_if = "should_skip_auth_indicator")]
     pub has_stored_password: bool,
+    /// Per-session override for password storage mode. None means inherit from global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passwd_unsafe_mode: Option<PasswdUnsafeMode>,
+    /// Password stored in unsafe format (plaintext for bare, base64-encoded XOR for simple)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_password: Option<String>,
 }
 
 fn should_skip_auth_indicator(b: &bool) -> bool {
@@ -49,6 +68,48 @@ impl Session {
     }
 }
 
+/// Root-level wrapper for the sessions.json file format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStoreData {
+    /// Global password storage mode setting
+    #[serde(default)]
+    pub passwd_unsafe_mode: PasswdUnsafeMode,
+    /// Fallback XOR key if SSHER_UNSAFE_KEY env var not set
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passwd_unsafe_key: Option<String>,
+    /// List of sessions
+    pub sessions: Vec<Session>,
+}
+
+impl Default for SessionStoreData {
+    fn default() -> Self {
+        Self {
+            passwd_unsafe_mode: PasswdUnsafeMode::Normal,
+            passwd_unsafe_key: None,
+            sessions: Vec::new(),
+        }
+    }
+}
+
+impl SessionStoreData {
+    /// Create from a list of sessions (for backward compatibility with old array format)
+    pub fn from_sessions(sessions: Vec<Session>) -> Self {
+        Self {
+            passwd_unsafe_mode: PasswdUnsafeMode::Normal,
+            passwd_unsafe_key: None,
+            sessions,
+        }
+    }
+
+    /// Get the effective password mode for a session
+    pub fn effective_passwd_mode(&self, session: &Session) -> PasswdUnsafeMode {
+        session
+            .passwd_unsafe_mode
+            .clone()
+            .unwrap_or_else(|| self.passwd_unsafe_mode.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +126,8 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
         assert_eq!(session.target(), "alice@example.com");
     }
@@ -80,6 +143,8 @@ mod tests {
             tags: vec!["work".to_string(), "prod".to_string()],
             last_connected_at: Some(1234567890),
             has_stored_password: true,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains(r#""name":"office""#));
@@ -142,6 +207,8 @@ mod tests {
             tags: vec!["a".to_string(), "b".to_string()],
             last_connected_at: Some(999),
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
@@ -159,6 +226,8 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
 
         let status = session.auth_status();
@@ -178,6 +247,8 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: true,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
 
         let status = session.auth_status();
@@ -197,6 +268,8 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: true,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
 
         let status = session.auth_status();
@@ -216,6 +289,8 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -233,10 +308,175 @@ mod tests {
             tags: vec![],
             last_connected_at: None,
             has_stored_password: true,
+            passwd_unsafe_mode: None,
+            stored_password: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("has_stored_password"));
         assert!(json.contains(r#""has_stored_password":true"#));
+    }
+
+    #[test]
+    fn passwd_unsafe_mode_default_is_normal() {
+        assert_eq!(PasswdUnsafeMode::default(), PasswdUnsafeMode::Normal);
+    }
+
+    #[test]
+    fn passwd_unsafe_mode_serialization() {
+        assert_eq!(
+            serde_json::to_string(&PasswdUnsafeMode::Normal).unwrap(),
+            r#""normal""#
+        );
+        assert_eq!(
+            serde_json::to_string(&PasswdUnsafeMode::Bare).unwrap(),
+            r#""bare""#
+        );
+        assert_eq!(
+            serde_json::to_string(&PasswdUnsafeMode::Simple).unwrap(),
+            r#""simple""#
+        );
+    }
+
+    #[test]
+    fn passwd_unsafe_mode_deserialization() {
+        assert_eq!(
+            serde_json::from_str::<PasswdUnsafeMode>(r#""normal""#).unwrap(),
+            PasswdUnsafeMode::Normal
+        );
+        assert_eq!(
+            serde_json::from_str::<PasswdUnsafeMode>(r#""bare""#).unwrap(),
+            PasswdUnsafeMode::Bare
+        );
+        assert_eq!(
+            serde_json::from_str::<PasswdUnsafeMode>(r#""simple""#).unwrap(),
+            PasswdUnsafeMode::Simple
+        );
+    }
+
+    #[test]
+    fn session_with_unsafe_mode_serialization() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: true,
+            passwd_unsafe_mode: Some(PasswdUnsafeMode::Bare),
+            stored_password: Some("secret".to_string()),
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains(r#""passwd_unsafe_mode":"bare""#));
+        assert!(json.contains(r#""stored_password":"secret""#));
+    }
+
+    #[test]
+    fn session_unsafe_mode_skipped_when_none() {
+        let session = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(!json.contains("passwd_unsafe_mode"));
+        assert!(!json.contains("stored_password"));
+    }
+
+    #[test]
+    fn session_store_data_default() {
+        let data = SessionStoreData::default();
+        assert_eq!(data.passwd_unsafe_mode, PasswdUnsafeMode::Normal);
+        assert!(data.passwd_unsafe_key.is_none());
+        assert!(data.sessions.is_empty());
+    }
+
+    #[test]
+    fn session_store_data_from_sessions() {
+        let sessions = vec![Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
+        }];
+
+        let data = SessionStoreData::from_sessions(sessions);
+        assert_eq!(data.passwd_unsafe_mode, PasswdUnsafeMode::Normal);
+        assert!(data.passwd_unsafe_key.is_none());
+        assert_eq!(data.sessions.len(), 1);
+    }
+
+    #[test]
+    fn effective_passwd_mode_uses_session_override() {
+        let mut data = SessionStoreData::default();
+        data.passwd_unsafe_mode = PasswdUnsafeMode::Bare;
+
+        let session_with_override = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+            passwd_unsafe_mode: Some(PasswdUnsafeMode::Simple),
+            stored_password: None,
+        };
+
+        // Session override takes precedence
+        assert_eq!(
+            data.effective_passwd_mode(&session_with_override),
+            PasswdUnsafeMode::Simple
+        );
+
+        let session_without_override = Session {
+            name: "test".to_string(),
+            host: "example.com".to_string(),
+            user: "user".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec![],
+            last_connected_at: None,
+            has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
+        };
+
+        // Falls back to global
+        assert_eq!(
+            data.effective_passwd_mode(&session_without_override),
+            PasswdUnsafeMode::Bare
+        );
+    }
+
+    #[test]
+    fn session_store_data_serialization() {
+        let data = SessionStoreData {
+            passwd_unsafe_mode: PasswdUnsafeMode::Simple,
+            passwd_unsafe_key: Some("my-key".to_string()),
+            sessions: vec![],
+        };
+
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains(r#""passwd_unsafe_mode":"simple""#));
+        assert!(json.contains(r#""passwd_unsafe_key":"my-key""#));
     }
 }
