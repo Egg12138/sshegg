@@ -3,6 +3,8 @@
 ## publish
 
 * publish release on github, managed by CLI `gh`
+* every code change must bump the project version according to semantic versioning
+* after every version bump, always publish a GitHub release for that version
 * DO NOT publish to crate.io
 * we alwasy wanna my project binary to be installed as `se`, just like `rg` for `ripgrep`
 installation scripts should be correct for naming
@@ -28,12 +30,17 @@ Structure tests under `tests/` for integration suites and keep unit tests inside
 Implement subcommands like `ssher add`, `ssher list`, `ssher remove`, and `ssher tui`. Sessions must record name, host, user, port, and optional identity file and be serialized to JSON in the configured store. The TUI (e.g., using `tui`, `crossterm`, or `ratatui`) should present a searchable table of sessions and execute `ssh` with the selected entry upon confirmation. Document how the TUI navigates (arrows, search, enter) so contributors can replicate the user experience.
 
 ## Commit & Pull Request Guidelines
-Adopt Conventional Commits (`feat:`, `fix:`, `chore:`) to keep history structured. Every PR needs a concise summary, why it matters, and links to relevant issues or design notes. Mention any TUI behaviour changes in the description and add a brief demo (GIF or `asciinema`) when the UI is altered substantially.
+Adopt Conventional Commits (`feat:`, `fix:`, `chore:`) to keep history structured. Every code-bearing change must include a semantic version bump that matches the change impact (`patch` for fixes, `minor` for backward-compatible features, `major` for breaking changes). Every PR needs a concise summary, why it matters, and links to relevant issues or design notes. Mention any TUI behaviour changes in the description and add a brief demo (GIF or `asciinema`) when the UI is altered substantially. Once a version changes, a matching GitHub release should always be published.
 
 ## Security & Configuration Tips
 Never commit private keys—reference `~/.ssh` identity files in session entries. Store configuration defaults in `Cargo.toml` or `config/` templates, and keep secrets in `~/.config/ssher/.env` (ignored via `.gitignore`). Run `cargo audit` periodically once dependencies exist and document any suppressed advisories with their rationale.
 
-## Project Goals & Progress
+## Issue Tracking
+Check `issues.md` first for the current urgent defect backlog and the corresponding GitHub issue links. If `Current Severe Defects` or `Updated Requirements` mention an urgent problem, treat `issues.md` as the local source of truth for which GitHub issues must be addressed first.
+
+## Plans
+The subsections in this section are intentionally stable and machine-parseable. Scripts may parse the `###` headings and the bullet lists under them directly.
+
 ### Goals
 - Vim-style TUI operation aligned with `~/source/todaycli`.
 - Dynamic identity file validation and autocomplete while entering paths in TUI mode.
@@ -47,6 +54,10 @@ Never commit private keys—reference `~/.ssh` identity files in session entries
 - Session tags for grouping/filtering.
 - Fast SCP workflows (send/receive) to a host.
 - Password authentication support with secure keyring storage and auto-detect fallback.
+- SCP password entry must use a clear dedicated prompt/modal instead of the current confusing inline experience.
+- SCP local/remote path selection must support interactive autocomplete.
+- SCP path input must support wildcard matching / glob-style patterns.
+- Remote terminal screen sizing must stay native and update correctly on terminal resize events, including full-screen apps like `vim`.
 
 ### Progress
 - Base CLI/TUI flow implemented (add/list/remove/tui, default to TUI, empty-store interactive add).
@@ -59,3 +70,15 @@ Never commit private keys—reference `~/.ssh` identity files in session entries
 - Documentation updated for usage and config.
 - Password authentication infrastructure (Phase 1): keyring integration, model updates.
 - Password authentication CLI support (Phase 2): ssh2 backend, --password/--no-password flags, remove-password command.
+
+### Current Severe Defects
+- `se` SCP password input UX is currently confusing and unreliable; this is a severe usability defect and needs a clear, well-bounded password entry UI.
+- `se` SCP file/path selection currently lacks the required autocomplete workflow, making send/receive flows too error-prone.
+- `se` SCP path handling currently needs wildcard matching support so users can target multiple files naturally.
+- Remote connection screen sizing is currently broken in terminal-emulation mode: after opening interactive apps like `vim`, resizing the local terminal does not propagate a native size update, leaving the remote display stuck at a smaller viewport.
+
+### Updated Requirements
+- Add an explicit, clean password-entry interface for SCP flows, with clear visual boundaries and predictable focus/submit behavior.
+- Add autocomplete for SCP file selection, covering both path entry and interactive picking workflows where applicable.
+- Support wildcard matching in SCP source/target paths.
+- Ensure remote terminal sessions propagate resize events correctly so full-screen apps always render at the current terminal size.
