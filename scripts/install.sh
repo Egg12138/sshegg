@@ -691,8 +691,8 @@ setup_config() {
     fi
 
     echo ""
-    echo "  ${BLUE}Config location:${NC} ${CONFIG_DIR}"
-    echo "  ${BLUE}Edit configs to customize ssher behavior${NC}"
+    echo -e "  ${BLUE}Config location:${NC} ${CONFIG_DIR}"
+    echo -e "  ${BLUE}Edit configs to customize ssher behavior${NC}"
 }
 
 install_completions() {
@@ -726,7 +726,7 @@ install_completions() {
             cp scripts/completions/se.zsh "${ZSH_FUNCTIONS}/_se"
             rm -f "${ZSH_FUNCTIONS}/_ssher"
             print_success "zsh completions installed to ${ZSH_FUNCTIONS}/_se"
-            echo "    Add to ~/.zshrc: fpath=(\"${ZSH_FUNCTIONS}\" \$fpath)"
+            echo -e "    Add to ~/.zshrc: fpath=(\"${ZSH_FUNCTIONS}\" \$fpath)"
             INSTALLED_SOMETHING=true
         fi
     fi
@@ -752,14 +752,14 @@ print_summary() {
     echo ""
     echo -e "${GREEN}==> Installation complete!${NC}"
     echo ""
-    echo "  ${BLUE}Binary:${NC}        ${PREFIX}/se"
-    echo "  ${BLUE}Legacy:${NC}        ${PREFIX}/ssher -> se (compat)"
-    echo "  ${BLUE}Config:${NC}        ${HOME}/.config/ssher/"
+    echo -e "  ${BLUE}Binary:${NC}        ${PREFIX}/se"
+    echo -e "  ${BLUE}Legacy:${NC}        ${PREFIX}/ssher -> se (compat)"
+    echo -e "  ${BLUE}Config:${NC}        ${HOME}/.config/ssher/"
     echo ""
-    echo "  ${BLUE}Next steps:${NC}"
+    echo -e "  ${BLUE}Next steps:${NC}"
     echo "    1. Make sure ${PREFIX} is in your PATH"
     if [[ ":$PATH:" != *":${PREFIX}:"* ]]; then
-        echo "       ${YELLOW}Currently NOT in PATH${NC}"
+        echo -e "       ${YELLOW}Currently NOT in PATH${NC}"
         echo "       Add to ~/.bashrc or ~/.zshrc:"
         echo "         export PATH=\"${PREFIX}:\$PATH\""
     fi

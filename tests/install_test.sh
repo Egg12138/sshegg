@@ -41,8 +41,24 @@ else
     echo "  ✓ Invalid option rejected"
 fi
 
-# Test 3: Build the binary
-echo "Test 3: Building binary"
+# Test 3: Summary output should render ANSI escapes instead of literal \033 text
+echo "Test 3: Summary output ANSI formatting"
+summary_output=$(
+    PREFIX="$TEST_PREFIX" HOME="$TEST_HOME" bash -lc '
+        set -- --help
+        source "'"$PROJECT_ROOT"'/scripts/install.sh" >/dev/null 2>&1 || true
+        print_summary
+    '
+)
+if [[ "$summary_output" == *'\033['* ]]; then
+    echo "  ✗ Summary output contains literal escape sequences"
+    exit 1
+else
+    echo "  ✓ Summary output does not contain literal escape sequences"
+fi
+
+# Test 4: Build the binary
+echo "Test 4: Building binary"
 cd "$PROJECT_ROOT"
 if cargo build --release > /dev/null 2>&1; then
     echo "  ✓ Binary built successfully"
@@ -51,8 +67,8 @@ else
     exit 1
 fi
 
-# Test 4: Run installation with custom prefix and HOME
-echo "Test 4: Running installation with --prefix --from-source"
+# Test 5: Run installation with custom prefix and HOME
+echo "Test 5: Running installation with --prefix --from-source"
 export HOME="$TEST_HOME"
 if bash "$PROJECT_ROOT/scripts/install.sh" --prefix "$TEST_PREFIX" --from-source > /dev/null 2>&1; then
     echo "  ✓ Installation script ran successfully"
@@ -61,8 +77,8 @@ else
     exit 1
 fi
 
-# Test 5: Check binary was installed
-echo "Test 5: Checking binary installation"
+# Test 6: Check binary was installed
+echo "Test 6: Checking binary installation"
 if [[ -f "$TEST_PREFIX/se" ]]; then
     echo "  ✓ Binary exists at $TEST_PREFIX/se"
 else
@@ -77,8 +93,8 @@ else
     exit 1
 fi
 
-# Test 6: Check config directory was created
-echo "Test 6: Checking config directory creation"
+# Test 7: Check config directory was created
+echo "Test 7: Checking config directory creation"
 if [[ -d "$TEST_HOME/.config/ssher" ]]; then
     echo "  ✓ Config directory created at $TEST_HOME/.config/ssher"
 else
@@ -86,8 +102,8 @@ else
     exit 1
 fi
 
-# Test 7: Check sample configs were installed
-echo "Test 7: Checking sample config installation"
+# Test 8: Check sample configs were installed
+echo "Test 8: Checking sample config installation"
 if [[ -f "$TEST_HOME/.config/ssher/ui.json" ]]; then
     echo "  ✓ UI config installed"
 else
@@ -102,8 +118,8 @@ else
     exit 1
 fi
 
-# Test 8: Run the installed binary
-echo "Test 8: Running installed binary"
+# Test 9: Run the installed binary
+echo "Test 9: Running installed binary"
 if "$TEST_PREFIX/se" --help > /dev/null 2>&1; then
     echo "  ✓ Installed binary runs successfully"
 else
@@ -119,8 +135,8 @@ else
     exit 1
 fi
 
-# Test 9: Check completion file naming uses 'se'
-echo "Test 9: Checking completion file naming"
+# Test 10: Check completion file naming uses 'se'
+echo "Test 10: Checking completion file naming"
 if [[ -f "$TEST_HOME/.local/share/bash-completion/completions/se" ]]; then
     echo "  ✓ Bash completion installed as 'se'"
 else
@@ -135,8 +151,8 @@ else
     exit 1
 fi
 
-# Test 10: Check legacy command compatibility binary
-echo "Test 10: Checking legacy 'ssher' compatibility command"
+# Test 11: Check legacy command compatibility binary
+echo "Test 11: Checking legacy 'ssher' compatibility command"
 if [[ -x "$TEST_PREFIX/ssher" ]]; then
     echo "  ✓ Legacy compatibility command exists at $TEST_PREFIX/ssher"
 else
