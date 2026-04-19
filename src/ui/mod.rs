@@ -75,7 +75,8 @@ struct PopupCursor {
 
 struct PopupPanel<'a> {
     title: Line<'a>,
-    body: String,
+    body_lines: Vec<String>,
+    accent_lines: Vec<usize>,
     width_percent: u16,
     height_percent: u16,
     cursor: Option<PopupCursor>,
@@ -915,7 +916,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             theme,
             PopupPanel {
                 title: form_panel_title("Add", form.edit_mode(), theme),
-                body: build_add_form_lines(form, show_inline_caret).join("\n"),
+                body_lines: build_add_form_lines(form, show_inline_caret),
+                accent_lines: Vec::new(),
                 width_percent: 70,
                 height_percent: 50,
                 cursor: None,
@@ -933,7 +935,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             theme,
             PopupPanel {
                 title: form_panel_title("Edit", form.edit_mode(), theme),
-                body: build_add_form_lines(form, show_inline_caret).join("\n"),
+                body_lines: build_add_form_lines(form, show_inline_caret),
+                accent_lines: Vec::new(),
                 width_percent: 70,
                 height_percent: 50,
                 cursor: None,
@@ -967,7 +970,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
                 theme,
                 PopupPanel {
                     title: Line::from("SCP"),
-                    body: build_scp_form_lines(form, show_inline_caret).join("\n"),
+                    body_lines: build_scp_form_lines(form, show_inline_caret),
+                    accent_lines: Vec::new(),
                     width_percent: 70,
                     height_percent: 45,
                     cursor: None,
@@ -984,7 +988,11 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             theme,
             PopupPanel {
                 title: Line::from("Help"),
-                body: HELP_PANEL_LINES.join("\n"),
+                body_lines: HELP_PANEL_LINES
+                    .iter()
+                    .map(|line| (*line).to_string())
+                    .collect(),
+                accent_lines: (0..HELP_PANEL_LINES.len()).collect(),
                 width_percent: 70,
                 height_percent: 60,
                 cursor: None,
@@ -1000,10 +1008,14 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
             theme,
             PopupPanel {
                 title: Line::from("Error"),
-                body: format!(
-                    "An error occurred.\n\n{}\n\n[Esc] Close this panel",
-                    error_details
-                ),
+                body_lines: vec![
+                    "An error occurred.".to_string(),
+                    String::new(),
+                    error_details.to_string(),
+                    String::new(),
+                    "[Esc] Close this panel".to_string(),
+                ],
+                accent_lines: vec![0, 4],
                 width_percent: 80,
                 height_percent: 70,
                 cursor: None,
@@ -1149,14 +1161,26 @@ fn render_popup_panel(
     let modal_area = centered_rect(panel.width_percent, panel.height_percent, size);
     frame.render_widget(Clear, modal_area);
 
-    let mut paragraph = Paragraph::new(panel.body)
-        .style(Style::default().fg(theme.text))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title(panel.title),
-        );
+    let text = panel
+        .body_lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let style = if panel.accent_lines.contains(&index) {
+                Style::default().fg(theme.help)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            Line::styled(line, style)
+        })
+        .collect::<Vec<_>>();
+
+    let mut paragraph = Paragraph::new(Text::from(text)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border))
+            .title(panel.title),
+    );
     if panel.wrap {
         paragraph = paragraph.wrap(Wrap { trim: false });
     }
@@ -1177,24 +1201,30 @@ fn build_text_entry_popup(
     height_percent: u16,
 ) -> PopupPanel<'static> {
     let mut lines = context_lines.to_vec();
+    let mut accent_lines = Vec::new();
+    for index in 0..context_lines.len() {
+        accent_lines.push(index);
+    }
     if !lines.is_empty() {
         lines.push(String::new());
     }
+    let prompt_index = lines.len();
     lines.push(entry.prompt().to_string());
+    accent_lines.push(prompt_index);
+    lines.push(String::new());
+    let input_line = lines.len() as u16;
     lines.push(format!("> {}", entry.display_value()));
     lines.push(String::new());
+    let footer_index = lines.len();
     lines.push(entry.footer_hint());
+    accent_lines.push(footer_index);
 
-    let input_line = if context_lines.is_empty() {
-        1
-    } else {
-        context_lines.len() as u16 + 2
-    };
     let input_column = 2 + entry.display_value().chars().count() as u16;
 
     PopupPanel {
         title: Line::from(entry.title().to_string()),
-        body: lines.join("\n"),
+        body_lines: lines,
+        accent_lines,
         width_percent,
         height_percent,
         cursor: Some(PopupCursor {
@@ -1969,4 +1999,46 @@ fn now_epoch_seconds() -> i64 {
 
 fn default_user() -> Option<String> {
     env::var("USER").or_else(|_| env::var("USERNAME")).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_text_entry_popup;
+    use crate::ui::state::TextEntryPanel;
+
+    #[test]
+    fn text_entry_popup_separates_hints_from_input_area() {
+        let entry = TextEntryPanel::new(
+            "SCP Password",
+            "Password for alice@example.com",
+            "Transfer",
+            true,
+        );
+
+        let popup = build_text_entry_popup(
+            &entry,
+            &[
+                "Session: office (alice@example.com)".to_string(),
+                "Leave blank to try key-based auth".to_string(),
+            ],
+            60,
+            30,
+        );
+
+        assert_eq!(
+            popup.body_lines,
+            vec![
+                "Session: office (alice@example.com)".to_string(),
+                "Leave blank to try key-based auth".to_string(),
+                String::new(),
+                "Password for alice@example.com".to_string(),
+                String::new(),
+                "> ".to_string(),
+                String::new(),
+                "[Enter] Transfer | [Esc] Cancel".to_string(),
+            ]
+        );
+        assert_eq!(popup.accent_lines, vec![0, 1, 3, 7]);
+        assert_eq!(popup.cursor.expect("cursor").line, 5);
+    }
 }
