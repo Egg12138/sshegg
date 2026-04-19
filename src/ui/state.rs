@@ -28,8 +28,7 @@ pub struct AppState {
     pending: Option<char>,
     status: String,
     error_popup: Option<String>,
-    delete_target: Option<String>,
-    delete_input: String,
+    delete_dialog: Option<DeleteDialog>,
     add_form: Option<AddSessionForm>,
     form_default_mode: FormEditMode,
     yank_buffer: Option<Session>,
@@ -50,8 +49,7 @@ impl AppState {
             pending: None,
             status: String::new(),
             error_popup: None,
-            delete_target: None,
-            delete_input: String::new(),
+            delete_dialog: None,
             add_form: None,
             form_default_mode: FormEditMode::Normal,
             yank_buffer: None,
@@ -166,8 +164,7 @@ impl AppState {
 
     pub fn start_delete(&mut self) -> bool {
         if let Some(session) = self.selected_session() {
-            self.delete_target = Some(session.name.clone());
-            self.delete_input.clear();
+            self.delete_dialog = Some(DeleteDialog::new(session.name.clone()));
             self.mode = InputMode::ConfirmDelete;
             true
         } else {
@@ -176,32 +173,26 @@ impl AppState {
     }
 
     pub fn cancel_delete(&mut self) {
-        self.delete_target = None;
-        self.delete_input.clear();
+        self.delete_dialog = None;
         self.mode = InputMode::Normal;
     }
 
     pub fn delete_target(&self) -> Option<&str> {
-        self.delete_target.as_deref()
-    }
-
-    pub fn delete_input(&self) -> &str {
-        &self.delete_input
-    }
-
-    pub fn push_delete_input(&mut self, ch: char) {
-        self.delete_input.push(ch);
-    }
-
-    pub fn pop_delete_input(&mut self) {
-        self.delete_input.pop();
+        self.delete_dialog.as_ref().map(DeleteDialog::target)
     }
 
     pub fn confirm_delete_matches(&self) -> bool {
-        match &self.delete_target {
-            Some(target) => target == &self.delete_input,
-            None => false,
-        }
+        self.delete_dialog
+            .as_ref()
+            .is_some_and(DeleteDialog::matches_target)
+    }
+
+    pub fn delete_dialog(&self) -> Option<&DeleteDialog> {
+        self.delete_dialog.as_ref()
+    }
+
+    pub fn delete_dialog_mut(&mut self) -> Option<&mut DeleteDialog> {
+        self.delete_dialog.as_mut()
     }
 
     pub fn remove_by_name(&mut self, name: &str) -> bool {
@@ -485,7 +476,10 @@ impl AddSessionForm {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             password: String::new(), // Don't load existing password
-            passwd_mode: session.passwd_unsafe_mode.clone().unwrap_or(PasswdUnsafeMode::Normal),
+            passwd_mode: session
+                .passwd_unsafe_mode
+                .clone()
+                .unwrap_or(PasswdUnsafeMode::Normal),
             tags: session.tags.join(","),
             field: AddField::Name,
             edit_mode,
@@ -646,6 +640,100 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
         .unwrap_or(value.len())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEntryPanel {
+    title: String,
+    prompt: String,
+    submit_label: String,
+    value: String,
+    masked: bool,
+}
+
+impl TextEntryPanel {
+    pub fn new(
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        submit_label: impl Into<String>,
+        masked: bool,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            prompt: prompt.into(),
+            submit_label: submit_label.into(),
+            value: String::new(),
+            masked,
+        }
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub fn push(&mut self, ch: char) {
+        self.value.push(ch);
+    }
+
+    pub fn pop(&mut self) {
+        self.value.pop();
+    }
+
+    pub fn display_value(&self) -> String {
+        if self.masked {
+            "*".repeat(self.value.chars().count())
+        } else {
+            self.value.clone()
+        }
+    }
+
+    pub fn footer_hint(&self) -> String {
+        format!("[Enter] {} | [Esc] Cancel", self.submit_label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteDialog {
+    target: String,
+    entry: TextEntryPanel,
+}
+
+impl DeleteDialog {
+    fn new(target: String) -> Self {
+        Self {
+            target,
+            entry: TextEntryPanel::new(
+                "Confirm Delete",
+                "Type the session name to confirm deletion",
+                "Delete",
+                false,
+            ),
+        }
+    }
+
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    pub fn entry(&self) -> &TextEntryPanel {
+        &self.entry
+    }
+
+    pub fn entry_mut(&mut self) -> &mut TextEntryPanel {
+        &mut self.entry
+    }
+
+    fn matches_target(&self) -> bool {
+        self.target == self.entry.value()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScpField {
     Direction,
@@ -703,6 +791,7 @@ pub struct ScpForm {
     pub direction: ScpDirection,
     pub recursive: bool,
     field: ScpField,
+    password_prompt: Option<TextEntryPanel>,
 }
 
 impl ScpForm {
@@ -714,6 +803,7 @@ impl ScpForm {
             direction: ScpDirection::To,
             recursive: false,
             field: ScpField::Local,
+            password_prompt: None,
         }
     }
 
@@ -743,6 +833,27 @@ impl ScpForm {
             ScpField::Remote => Some(&mut self.remote_path),
             _ => None,
         }
+    }
+
+    pub fn open_password_prompt(&mut self) {
+        self.password_prompt = Some(TextEntryPanel::new(
+            "SCP Password",
+            format!("Password for {}", self.session.target()),
+            "Transfer",
+            true,
+        ));
+    }
+
+    pub fn close_password_prompt(&mut self) {
+        self.password_prompt = None;
+    }
+
+    pub fn password_prompt(&self) -> Option<&TextEntryPanel> {
+        self.password_prompt.as_ref()
+    }
+
+    pub fn password_prompt_mut(&mut self) -> Option<&mut TextEntryPanel> {
+        self.password_prompt.as_mut()
     }
 }
 
@@ -858,5 +969,63 @@ mod tests {
         assert_eq!(app.status(), "Failure reminder");
         assert_eq!(app.error_popup(), None);
         assert!(!app.has_error_popup());
+    }
+
+    #[test]
+    fn text_entry_panel_masks_secret_values_and_exposes_explicit_actions() {
+        let mut panel = TextEntryPanel::new(
+            "SCP Password",
+            "Password for alice@example.com",
+            "Transfer",
+            true,
+        );
+
+        panel.push('s');
+        panel.push('e');
+        panel.push('c');
+        panel.push('r');
+        panel.push('e');
+        panel.push('t');
+
+        assert_eq!(panel.value(), "secret");
+        assert_eq!(panel.display_value(), "******");
+        assert_eq!(panel.footer_hint(), "[Enter] Transfer | [Esc] Cancel");
+    }
+
+    #[test]
+    fn start_delete_uses_shared_text_entry_panel() {
+        let sessions = vec![sample_session("office")];
+        let mut app = AppState::new(&sessions);
+
+        assert!(app.start_delete());
+
+        let dialog = app
+            .delete_dialog()
+            .expect("delete should use a shared text entry dialog");
+        assert_eq!(dialog.target(), "office");
+        assert_eq!(dialog.entry().title(), "Confirm Delete");
+        assert_eq!(
+            dialog.entry().prompt(),
+            "Type the session name to confirm deletion"
+        );
+        assert_eq!(
+            dialog.entry().footer_hint(),
+            "[Enter] Delete | [Esc] Cancel"
+        );
+    }
+
+    #[test]
+    fn scp_form_can_open_a_dedicated_password_prompt() {
+        let session = sample_session("office");
+        let mut form = ScpForm::new(session);
+
+        form.open_password_prompt();
+        let prompt = form
+            .password_prompt()
+            .expect("scp password prompt should be present");
+        assert_eq!(prompt.title(), "SCP Password");
+        assert_eq!(prompt.prompt(), "Password for alice@example.com");
+        assert_eq!(prompt.footer_hint(), "[Enter] Transfer | [Esc] Cancel");
+        assert_eq!(prompt.display_value(), "");
     }
 }

@@ -44,7 +44,11 @@ impl JsonFileStore {
 
     pub fn add(&self, session: Session) -> Result<()> {
         let mut data = self.load_full()?;
-        if data.sessions.iter().any(|existing| existing.name == session.name) {
+        if data
+            .sessions
+            .iter()
+            .any(|existing| existing.name == session.name)
+        {
             return Err(anyhow!("session '{}' already exists", session.name));
         }
         data.sessions.push(session);

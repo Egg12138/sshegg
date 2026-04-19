@@ -4,6 +4,7 @@ pub mod highlight;
 pub mod ordering;
 mod state;
 
+use crate::auth::resolve_session_password;
 use crate::model::{PasswdUnsafeMode, Session};
 use crate::password;
 use crate::store::SessionStore;
@@ -25,7 +26,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use std::env;
+use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use config::{ThemeConfig, UiConfig, load_ui_config};
@@ -62,6 +67,26 @@ const HELP_PANEL_LINES: &[&str] = &[
     "gg / G        Jump top or bottom",
     "Esc           Close help, cancel, or dismiss error details",
 ];
+
+struct PopupCursor {
+    line: u16,
+    column: u16,
+}
+
+struct PopupPanel<'a> {
+    title: Line<'a>,
+    body: String,
+    width_percent: u16,
+    height_percent: u16,
+    cursor: Option<PopupCursor>,
+    wrap: bool,
+}
+
+enum TextEntryAction {
+    Cancel,
+    Submit,
+    Continue,
+}
 
 impl Theme {
     fn from_config(config: &UiConfig) -> Self {
@@ -166,6 +191,28 @@ fn handle_key(
 fn show_error_popup(app: &mut AppState, reminder: &str, details: impl Into<String>) {
     app.set_error(reminder, details.into());
     app.set_pending(None);
+}
+
+fn handle_text_entry_key(
+    entry: &mut crate::ui::state::TextEntryPanel,
+    key: KeyEvent,
+) -> TextEntryAction {
+    match key.code {
+        KeyCode::Esc => TextEntryAction::Cancel,
+        KeyCode::Enter => TextEntryAction::Submit,
+        KeyCode::Backspace => {
+            entry.pop();
+            TextEntryAction::Continue
+        }
+        KeyCode::Char(ch)
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
+        {
+            entry.push(ch);
+            TextEntryAction::Continue
+        }
+        _ => TextEntryAction::Continue,
+    }
 }
 
 fn handle_normal_key(app: &mut AppState, key: KeyEvent) -> Result<Option<Option<Session>>> {
@@ -322,12 +369,17 @@ fn handle_confirm_delete_key(
     store: &dyn SessionStore,
     key: KeyEvent,
 ) -> Result<Option<Option<Session>>> {
-    match key.code {
-        KeyCode::Esc => {
+    let Some(dialog) = app.delete_dialog_mut() else {
+        app.cancel_delete();
+        return Ok(None);
+    };
+
+    match handle_text_entry_key(dialog.entry_mut(), key) {
+        TextEntryAction::Cancel => {
             app.cancel_delete();
             app.clear_status();
         }
-        KeyCode::Enter => {
+        TextEntryAction::Submit => {
             if app.confirm_delete_matches() {
                 if let Some(target) = app.delete_target().map(str::to_string) {
                     store.remove(&target)?;
@@ -339,14 +391,7 @@ fn handle_confirm_delete_key(
                 app.set_status("Delete confirmation does not match session name");
             }
         }
-        KeyCode::Backspace => app.pop_delete_input(),
-        KeyCode::Char(ch)
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-        {
-            app.push_delete_input(ch)
-        }
-        _ => {}
+        TextEntryAction::Continue => {}
     }
     Ok(None)
 }
@@ -399,7 +444,9 @@ fn handle_add_session_key(
                     form.move_cursor_right();
                 }
             }
-            KeyCode::Char(' ') if form.field() == AddField::PasswdMode && form.show_passwd_mode() => {
+            KeyCode::Char(' ')
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() =>
+            {
                 form.cycle_passwd_mode();
             }
             _ => {}
@@ -494,7 +541,9 @@ fn handle_edit_session_key(
                     form.move_cursor_right();
                 }
             }
-            KeyCode::Char(' ') if form.field() == AddField::PasswdMode && form.show_passwd_mode() => {
+            KeyCode::Char(' ')
+                if form.field() == AddField::PasswdMode && form.show_passwd_mode() =>
+            {
                 form.cycle_passwd_mode();
             }
             _ => {}
@@ -546,51 +595,72 @@ fn handle_scp_key(
     store: &dyn SessionStore,
     key: KeyEvent,
 ) -> Result<Option<Option<Session>>> {
-    let Some(form) = app.scp_form_mut() else {
-        app.cancel_scp();
-        return Ok(None);
-    };
-
-    let field = form.field();
-
-    match key.code {
-        KeyCode::Esc => {
+    let mut submit_password = false;
+    {
+        let Some(form) = app.scp_form_mut() else {
             app.cancel_scp();
-            app.clear_status();
-        }
-        KeyCode::Tab => form.next_field(),
-        KeyCode::BackTab => form.prev_field(),
-        KeyCode::Enter => {
-            if field == ScpField::Recursive {
-                submit_scp(app, store)?;
-            } else {
-                form.next_field();
+            return Ok(None);
+        };
+
+        if let Some(prompt) = form.password_prompt_mut() {
+            match handle_text_entry_key(prompt, key) {
+                TextEntryAction::Cancel => {
+                    form.close_password_prompt();
+                    app.set_status("SCP password entry cancelled");
+                }
+                TextEntryAction::Submit => submit_password = true,
+                TextEntryAction::Continue => {}
+            }
+            if !submit_password {
+                return Ok(None);
+            }
+        } else {
+            let field = form.field();
+
+            match key.code {
+                KeyCode::Esc => {
+                    app.cancel_scp();
+                    app.clear_status();
+                }
+                KeyCode::Tab => form.next_field(),
+                KeyCode::BackTab => form.prev_field(),
+                KeyCode::Enter => {
+                    if field == ScpField::Recursive {
+                        submit_scp(app, store)?;
+                    } else {
+                        form.next_field();
+                    }
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Char('t') | KeyCode::Char(' ')
+                    if field == ScpField::Direction =>
+                {
+                    form.toggle_direction();
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Char('r') | KeyCode::Char(' ')
+                    if field == ScpField::Recursive =>
+                {
+                    form.toggle_recursive();
+                }
+                KeyCode::Backspace => {
+                    if let Some(value) = form.active_editable_mut() {
+                        value.pop();
+                    }
+                }
+                KeyCode::Char(ch)
+                    if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(event::KeyModifiers::ALT) =>
+                {
+                    if let Some(value) = form.active_editable_mut() {
+                        value.push(ch);
+                    }
+                }
+                _ => {}
             }
         }
-        KeyCode::Left | KeyCode::Right | KeyCode::Char('t') | KeyCode::Char(' ')
-            if field == ScpField::Direction =>
-        {
-            form.toggle_direction();
-        }
-        KeyCode::Left | KeyCode::Right | KeyCode::Char('r') | KeyCode::Char(' ')
-            if field == ScpField::Recursive =>
-        {
-            form.toggle_recursive();
-        }
-        KeyCode::Backspace => {
-            if let Some(value) = form.active_editable_mut() {
-                value.pop();
-            }
-        }
-        KeyCode::Char(ch)
-            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-        {
-            if let Some(value) = form.active_editable_mut() {
-                value.push(ch);
-            }
-        }
-        _ => {}
+    }
+
+    if submit_password {
+        submit_scp(app, store)?;
     }
 
     Ok(None)
@@ -821,104 +891,125 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
     }
 
     if app.mode() == InputMode::ConfirmDelete {
-        let target = app.delete_target().unwrap_or("-");
-        let modal_area = centered_rect(60, 30, size);
-        frame.render_widget(Clear, modal_area);
-        let text = format!(
-            "Delete session: {}\nType session name to confirm:\n> {}",
-            target,
-            app.delete_input()
-        );
-        let modal = Paragraph::new(text).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title("Confirm Delete"),
-        );
-        frame.render_widget(modal, modal_area);
-
-        let cursor_x = modal_area.x + 3 + app.delete_input().len() as u16;
-        let cursor_y = modal_area.y + 3;
-        frame.set_cursor_position((cursor_x, cursor_y));
+        if let Some(dialog) = app.delete_dialog() {
+            render_popup_panel(
+                frame,
+                size,
+                theme,
+                build_text_entry_popup(
+                    dialog.entry(),
+                    &[format!("Delete session: {}", dialog.target())],
+                    60,
+                    30,
+                ),
+            );
+        }
     }
 
     if app.mode() == InputMode::AddSession
         && let Some(form) = app.add_form()
     {
-        let modal_area = centered_rect(70, 50, size);
-        frame.render_widget(Clear, modal_area);
-        let lines = build_add_form_lines(form, show_inline_caret);
-        let modal = Paragraph::new(lines.join("\n")).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title(form_panel_title("Add", form.edit_mode(), theme)),
+        render_popup_panel(
+            frame,
+            size,
+            theme,
+            PopupPanel {
+                title: form_panel_title("Add", form.edit_mode(), theme),
+                body: build_add_form_lines(form, show_inline_caret).join("\n"),
+                width_percent: 70,
+                height_percent: 50,
+                cursor: None,
+                wrap: false,
+            },
         );
-        frame.render_widget(modal, modal_area);
     }
 
     if app.mode() == InputMode::EditSession
         && let Some(form) = app.add_form()
     {
-        let modal_area = centered_rect(70, 50, size);
-        frame.render_widget(Clear, modal_area);
-        let lines = build_add_form_lines(form, show_inline_caret);
-        let modal = Paragraph::new(lines.join("\n")).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title(form_panel_title("Edit", form.edit_mode(), theme)),
+        render_popup_panel(
+            frame,
+            size,
+            theme,
+            PopupPanel {
+                title: form_panel_title("Edit", form.edit_mode(), theme),
+                body: build_add_form_lines(form, show_inline_caret).join("\n"),
+                width_percent: 70,
+                height_percent: 50,
+                cursor: None,
+                wrap: false,
+            },
         );
-        frame.render_widget(modal, modal_area);
     }
 
     if app.mode() == InputMode::Scp
         && let Some(form) = app.scp_form()
     {
-        let modal_area = centered_rect(70, 45, size);
-        frame.render_widget(Clear, modal_area);
-        let lines = build_scp_form_lines(form, show_inline_caret);
-        let modal = Paragraph::new(lines.join("\n")).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border))
-                .title("SCP"),
-        );
-        frame.render_widget(modal, modal_area);
+        if let Some(prompt) = form.password_prompt() {
+            render_popup_panel(
+                frame,
+                size,
+                theme,
+                build_text_entry_popup(
+                    prompt,
+                    &[
+                        format!("Session: {} ({})", form.session.name, form.session.target()),
+                        "Leave blank to try key-based auth".to_string(),
+                    ],
+                    60,
+                    30,
+                ),
+            );
+        } else {
+            render_popup_panel(
+                frame,
+                size,
+                theme,
+                PopupPanel {
+                    title: Line::from("SCP"),
+                    body: build_scp_form_lines(form, show_inline_caret).join("\n"),
+                    width_percent: 70,
+                    height_percent: 45,
+                    cursor: None,
+                    wrap: false,
+                },
+            );
+        }
     }
 
     if app.mode() == InputMode::Help {
-        let help_area = centered_rect(70, 60, size);
-        frame.render_widget(Clear, help_area);
-        let help_text = HELP_PANEL_LINES.join("\n");
-        let help_panel = Paragraph::new(help_text)
-            .style(Style::default().fg(theme.text))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("Help"),
-            );
-        frame.render_widget(help_panel, help_area);
+        render_popup_panel(
+            frame,
+            size,
+            theme,
+            PopupPanel {
+                title: Line::from("Help"),
+                body: HELP_PANEL_LINES.join("\n"),
+                width_percent: 70,
+                height_percent: 60,
+                cursor: None,
+                wrap: false,
+            },
+        );
     }
 
     if let Some(error_details) = app.error_popup() {
-        let modal_area = centered_rect(80, 70, size);
-        frame.render_widget(Clear, modal_area);
-        let modal_text = format!(
-            "An error occurred.\n\n{}\n\n[Esc] Close this panel",
-            error_details
+        render_popup_panel(
+            frame,
+            size,
+            theme,
+            PopupPanel {
+                title: Line::from("Error"),
+                body: format!(
+                    "An error occurred.\n\n{}\n\n[Esc] Close this panel",
+                    error_details
+                ),
+                width_percent: 80,
+                height_percent: 70,
+                cursor: None,
+                wrap: true,
+            },
         );
-        let modal = Paragraph::new(modal_text)
-            .style(Style::default().fg(theme.text))
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
-                    .title("Error"),
-            );
-        frame.render_widget(modal, modal_area);
     }
 }
 
@@ -1047,6 +1138,71 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn render_popup_panel(
+    frame: &mut ratatui::Frame,
+    size: Rect,
+    theme: &Theme,
+    panel: PopupPanel<'_>,
+) {
+    let modal_area = centered_rect(panel.width_percent, panel.height_percent, size);
+    frame.render_widget(Clear, modal_area);
+
+    let mut paragraph = Paragraph::new(panel.body)
+        .style(Style::default().fg(theme.text))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .title(panel.title),
+        );
+    if panel.wrap {
+        paragraph = paragraph.wrap(Wrap { trim: false });
+    }
+    frame.render_widget(paragraph, modal_area);
+
+    if let Some(cursor) = panel.cursor {
+        frame.set_cursor_position((
+            modal_area.x + 1 + cursor.column,
+            modal_area.y + 1 + cursor.line,
+        ));
+    }
+}
+
+fn build_text_entry_popup(
+    entry: &crate::ui::state::TextEntryPanel,
+    context_lines: &[String],
+    width_percent: u16,
+    height_percent: u16,
+) -> PopupPanel<'static> {
+    let mut lines = context_lines.to_vec();
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.push(entry.prompt().to_string());
+    lines.push(format!("> {}", entry.display_value()));
+    lines.push(String::new());
+    lines.push(entry.footer_hint());
+
+    let input_line = if context_lines.is_empty() {
+        1
+    } else {
+        context_lines.len() as u16 + 2
+    };
+    let input_column = 2 + entry.display_value().chars().count() as u16;
+
+    PopupPanel {
+        title: Line::from(entry.title().to_string()),
+        body: lines.join("\n"),
+        width_percent,
+        height_percent,
+        cursor: Some(PopupCursor {
+            line: input_line,
+            column: input_column,
+        }),
+        wrap: false,
+    }
 }
 
 fn build_add_form_lines(form: &AddSessionForm, show_inline_caret: bool) -> Vec<String> {
@@ -1203,6 +1359,7 @@ fn build_scp_form_lines(form: &ScpForm, show_inline_caret: bool) -> Vec<String> 
         },
     ));
     lines.push("  Space toggles Direction/Recursive".to_string());
+    lines.push("  Enter starts a password panel before transfer".to_string());
     lines
 }
 
@@ -1328,15 +1485,13 @@ fn submit_add_session(app: &mut AppState, store: &dyn SessionStore) -> Result<()
     let mut stored_password: Option<String> = None;
     let has_stored_password = if !password.is_empty() {
         match passwd_mode {
-            PasswdUnsafeMode::Normal => {
-                match try_store_password_for_ui(&name, &password)? {
-                    Some(warning) => {
-                        password_warning = Some(warning);
-                        false
-                    }
-                    None => true,
+            PasswdUnsafeMode::Normal => match try_store_password_for_ui(&name, &password)? {
+                Some(warning) => {
+                    password_warning = Some(warning);
+                    false
                 }
-            }
+                None => true,
+            },
             PasswdUnsafeMode::Bare => {
                 stored_password = Some(password.clone());
                 true
@@ -1443,10 +1598,7 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     let tags = split_tags(&tags_input);
 
     // Get existing session for password preservation
-    let existing_session = store
-        .list()?
-        .into_iter()
-        .find(|s| s.name == original_name);
+    let existing_session = store.list()?.into_iter().find(|s| s.name == original_name);
 
     // Handle password update - preserve existing if no new password provided
     let mut password_warning: Option<String> = None;
@@ -1489,7 +1641,10 @@ fn submit_edit_session(app: &mut AppState, store: &dyn SessionStore) -> Result<(
     } else {
         // No new password - preserve existing
         if let Some(ref existing) = existing_session {
-            (existing.has_stored_password, existing.passwd_unsafe_mode.clone())
+            (
+                existing.has_stored_password,
+                existing.passwd_unsafe_mode.clone(),
+            )
         } else {
             (false, None)
         }
@@ -1559,7 +1714,69 @@ fn submit_scp(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {
     let session = form.session.clone();
     let direction = form.direction;
     let recursive = form.recursive;
+    let prompt_open = form.password_prompt().is_some();
+    let prompted_password = form
+        .password_prompt()
+        .map(|prompt| prompt.value().to_string());
 
+    let password = if prompt_open {
+        prompted_password.filter(|value| !value.is_empty())
+    } else {
+        match resolve_session_password(store, &session) {
+            Ok(password) => password,
+            Err(err) if password::is_backend_unavailable_error(&err) => None,
+            Err(err) => return Err(err),
+        }
+    };
+
+    if password.is_none() && !prompt_open {
+        if let Some(form) = app.scp_form_mut() {
+            form.open_password_prompt();
+        }
+        app.set_status("SCP password: enter a password, or leave it blank to try key-based auth");
+        return Ok(());
+    }
+
+    let output = run_scp_transfer(
+        &session,
+        direction,
+        recursive,
+        &local_path,
+        &remote_path,
+        password.as_deref(),
+    )?;
+    if !output.status.success() {
+        if !prompt_open && let Some(form) = app.scp_form_mut() {
+            form.open_password_prompt();
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let details = if stderr.is_empty() {
+            format!("scp exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        app.set_error("SCP transfer failed (Esc closes error details)", details);
+        return Ok(());
+    }
+
+    store.touch_last_connected(&session.name, now_epoch_seconds())?;
+    if let Some(form) = app.scp_form_mut() {
+        form.close_password_prompt();
+    }
+    app.cancel_scp();
+    app.set_status(format!("SCP complete: {}", session.name));
+    Ok(())
+}
+
+fn run_scp_transfer(
+    session: &Session,
+    direction: ScpDirection,
+    recursive: bool,
+    local_path: &str,
+    remote_path: &str,
+    password: Option<&str>,
+) -> Result<std::process::Output> {
     let mut command = std::process::Command::new("scp");
     if recursive {
         command.arg("-r");
@@ -1572,23 +1789,47 @@ fn submit_scp(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {
     let remote_target = format!("{}@{}:{}", session.user, session.host, remote_path);
     match direction {
         ScpDirection::To => {
-            command.arg(&local_path).arg(remote_target);
+            command.arg(local_path).arg(remote_target);
         }
         ScpDirection::From => {
-            command.arg(remote_target).arg(&local_path);
+            command.arg(remote_target).arg(local_path);
         }
     }
 
-    let status = command.status()?;
-    if !status.success() {
-        app.set_status(format!("scp exited with status {}", status));
-        return Ok(());
+    if let Some(password) = password {
+        let script_path = write_askpass_script()?;
+        command
+            .env("SE_ASKPASS_PASSWORD", password)
+            .env("SSH_ASKPASS", &script_path)
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env(
+                "DISPLAY",
+                env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()),
+            )
+            .stdin(Stdio::null());
+        let output = command.output()?;
+        let _ = fs::remove_file(script_path);
+        Ok(output)
+    } else {
+        Ok(command.output()?)
     }
+}
 
-    store.touch_last_connected(&session.name, now_epoch_seconds())?;
-    app.cancel_scp();
-    app.set_status(format!("SCP complete: {}", session.name));
-    Ok(())
+fn write_askpass_script() -> Result<PathBuf> {
+    let unique_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let unique = format!("sshegg-scp-askpass-{}-{}", std::process::id(), unique_nanos);
+    let path = env::temp_dir().join(unique);
+    fs::write(
+        &path,
+        "#!/bin/sh\nprintf '%s\\n' \"$SE_ASKPASS_PASSWORD\"\n",
+    )?;
+    let mut permissions = fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions)?;
+    Ok(path)
 }
 
 fn update_identity_state(form: &mut AddSessionForm) {

@@ -16,7 +16,14 @@ fn config_set_passwd_unsafe_mode_normal() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_mode", "normal"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "normal",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Set passwd_unsafe_mode = normal"));
@@ -28,7 +35,14 @@ fn config_set_passwd_unsafe_mode_bare() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_mode", "bare"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "bare",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Set passwd_unsafe_mode = bare"));
@@ -40,7 +54,14 @@ fn config_set_passwd_unsafe_mode_simple() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_mode", "simple"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "simple",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Set passwd_unsafe_mode = simple"));
@@ -52,7 +73,14 @@ fn config_set_passwd_unsafe_mode_invalid() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_mode", "invalid"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "invalid",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid value"));
@@ -64,7 +92,13 @@ fn config_get_passwd_unsafe_mode_default() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "get", "passwd_unsafe_mode"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "get",
+            "passwd_unsafe_mode",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("normal"));
@@ -77,15 +111,30 @@ fn config_set_and_get_passwd_unsafe_key() {
     // Set key
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_key", "my-secret-key"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_key",
+            "my-secret-key",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Set passwd_unsafe_key = my-secret-key"));
+        .stdout(predicate::str::contains(
+            "Set passwd_unsafe_key = my-secret-key",
+        ));
 
     // Get key (should be masked)
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "get", "passwd_unsafe_key"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "get",
+            "passwd_unsafe_key",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("********"));
@@ -110,7 +159,13 @@ fn config_unknown_key_fails() {
 
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "get", "unknown_key"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "get",
+            "unknown_key",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("Unknown config key"));
@@ -124,7 +179,14 @@ fn add_with_passwd_mode_bare() {
     // Set global mode to bare
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "set", "passwd_unsafe_mode", "bare"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "bare",
+        ])
         .assert()
         .success();
 
@@ -132,11 +194,15 @@ fn add_with_passwd_mode_bare() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
         ])
         .write_stdin("test-password\n")
@@ -154,13 +220,18 @@ fn add_with_passwd_mode_simple_requires_key() {
         .unwrap()
         .env("SSHER_UNSAFE_KEY", "") // Clear any env key
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
-            "--passwd-mode", "simple",
+            "--passwd-mode",
+            "simple",
         ])
         .write_stdin("test-password\n")
         .assert()
@@ -176,13 +247,18 @@ fn add_with_passwd_mode_simple_with_env_key() {
         .unwrap()
         .env("SSHER_UNSAFE_KEY", "my-encryption-key")
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
-            "--passwd-mode", "simple",
+            "--passwd-mode",
+            "simple",
         ])
         .write_stdin("test-password\n")
         .assert()
@@ -200,7 +276,8 @@ fn migrates_old_array_format() {
     std::fs::write(
         &store_path,
         r#"[{"name":"office","host":"example.com","user":"me","port":22}]"#,
-    ).expect("write");
+    )
+    .expect("write");
 
     // Read should work and auto-migrate
     Command::cargo_bin("se")
@@ -213,7 +290,13 @@ fn migrates_old_array_format() {
     // Config should be default
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "config", "get", "passwd_unsafe_mode"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "get",
+            "passwd_unsafe_mode",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("normal"));
@@ -228,11 +311,15 @@ fn new_format_has_sessions_key() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
         ])
         .assert()
         .success();
@@ -254,8 +341,12 @@ fn update_preserves_unsafe_mode() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
-            "config", "set", "passwd_unsafe_mode", "bare",
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "bare",
         ])
         .assert()
         .success();
@@ -263,11 +354,15 @@ fn update_preserves_unsafe_mode() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
         ])
         .write_stdin("test-password\n")
@@ -278,10 +373,13 @@ fn update_preserves_unsafe_mode() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "update",
-            "--name", "test-session",
-            "--host", "newhost.example.com",
+            "--name",
+            "test-session",
+            "--host",
+            "newhost.example.com",
         ])
         .assert()
         .success();
@@ -304,8 +402,12 @@ fn export_excludes_stored_password() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
-            "config", "set", "passwd_unsafe_mode", "bare",
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "bare",
         ])
         .assert()
         .success();
@@ -313,11 +415,15 @@ fn export_excludes_stored_password() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
         ])
         .write_stdin("secret-password\n")
@@ -327,7 +433,13 @@ fn export_excludes_stored_password() {
     // Export to JSON
     Command::cargo_bin("se")
         .unwrap()
-        .args(["--store", store_path.to_str().unwrap(), "export", "--format", "json"])
+        .args([
+            "--store",
+            store_path.to_str().unwrap(),
+            "export",
+            "--format",
+            "json",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("test-session"))
@@ -344,8 +456,12 @@ fn remove_password_clears_unsafe_storage() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
-            "config", "set", "passwd_unsafe_mode", "bare",
+            "--store",
+            store_path.to_str().unwrap(),
+            "config",
+            "set",
+            "passwd_unsafe_mode",
+            "bare",
         ])
         .assert()
         .success();
@@ -353,11 +469,15 @@ fn remove_password_clears_unsafe_storage() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "add",
-            "--name", "test-session",
-            "--host", "example.com",
-            "--user", "testuser",
+            "--name",
+            "test-session",
+            "--host",
+            "example.com",
+            "--user",
+            "testuser",
             "--password",
         ])
         .write_stdin("test-password\n")
@@ -368,9 +488,11 @@ fn remove_password_clears_unsafe_storage() {
     Command::cargo_bin("se")
         .unwrap()
         .args([
-            "--store", store_path.to_str().unwrap(),
+            "--store",
+            store_path.to_str().unwrap(),
             "remove-password",
-            "--name", "test-session",
+            "--name",
+            "test-session",
         ])
         .assert()
         .success()

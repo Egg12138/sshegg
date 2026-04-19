@@ -126,12 +126,12 @@ pub fn get_encryption_key(config_key: Option<&str>) -> Result<String> {
     }
 
     // Fall back to config key
-    config_key
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow!(
+    config_key.map(|s| s.to_string()).ok_or_else(|| {
+        anyhow!(
             "No encryption key set. Set {} environment variable or passwd_unsafe_key in config.",
             UNSAFE_KEY_ENV_VAR
-        ))
+        )
+    })
 }
 
 /// XOR encode a password with a key, then base64 encode for safe JSON storage
@@ -168,7 +168,9 @@ pub fn store_unsafe_password(
 ) -> Result<String> {
     match mode {
         PasswdUnsafeMode::Normal => {
-            anyhow::bail!("store_unsafe_password called with Normal mode - use store_password instead")
+            anyhow::bail!(
+                "store_unsafe_password called with Normal mode - use store_password instead"
+            )
         }
         PasswdUnsafeMode::Bare => {
             // Store as plaintext
@@ -442,7 +444,8 @@ mod tests {
     #[test]
     fn store_unsafe_password_simple_encodes() {
         let password = "my-secret";
-        let stored = store_unsafe_password(password, &PasswdUnsafeMode::Simple, Some("my-key")).unwrap();
+        let stored =
+            store_unsafe_password(password, &PasswdUnsafeMode::Simple, Some("my-key")).unwrap();
 
         // Should not be plaintext
         assert_ne!(stored, password);
@@ -455,7 +458,12 @@ mod tests {
     fn store_unsafe_password_simple_requires_key() {
         let result = store_unsafe_password("secret", &PasswdUnsafeMode::Simple, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No encryption key set"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No encryption key set")
+        );
     }
 
     #[test]
@@ -471,7 +479,8 @@ mod tests {
         let key = "my-key";
         let encoded = xor_encode(password, key);
 
-        let retrieved = get_unsafe_password(&encoded, &PasswdUnsafeMode::Simple, Some(key)).unwrap();
+        let retrieved =
+            get_unsafe_password(&encoded, &PasswdUnsafeMode::Simple, Some(key)).unwrap();
         assert_eq!(retrieved, password);
     }
 
@@ -480,7 +489,12 @@ mod tests {
         let encoded = xor_encode("secret", "some-key");
         let result = get_unsafe_password(&encoded, &PasswdUnsafeMode::Simple, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No encryption key set"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No encryption key set")
+        );
     }
 
     #[test]
@@ -493,7 +507,8 @@ mod tests {
             &PasswdUnsafeMode::Bare,
             &PasswdUnsafeMode::Simple,
             Some(key),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should be different from plaintext
         assert_ne!(reencoded, plain_password);
@@ -513,7 +528,8 @@ mod tests {
             &PasswdUnsafeMode::Simple,
             &PasswdUnsafeMode::Bare,
             Some(key),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should be plaintext
         assert_eq!(reencoded, plain_password);

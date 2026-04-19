@@ -6,13 +6,13 @@ When working on currently severe defects or newly prioritized transfer/terminal 
 
 ## Current Urgent Issues
 
-- #16 SCP password input needs a dedicated focused UI instead of inline terminal prompts
+- #16 SCP password input needs a dedicated focused UI instead of inline terminal prompts (TUI)
   https://github.com/Egg12138/sshegg/issues/16
-- #17 Add autocomplete for SCP local and remote path selection
+- #17 Add autocomplete for SCP local and remote path selection (TUI)
   https://github.com/Egg12138/sshegg/issues/17
-- #18 Support wildcard and glob patterns in SCP paths
+- #18 Support wildcard and glob patterns in SCP paths(TUI)
   https://github.com/Egg12138/sshegg/issues/18
-- #19 Propagate native terminal resize events to remote full-screen sessions
+- #19 Propagate native terminal resize events to remote full-screen sessions (TUI)
   https://github.com/Egg12138/sshegg/issues/19
 
 ## Usage

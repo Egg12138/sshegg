@@ -1,7 +1,18 @@
 [package]
 name = "ssher"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
+default-run = "se"
+
+[[bin]]
+name = "se"
+path = "src/bin/se.rs"
+test = false
+
+[[bin]]
+name = "ssher"
+path = "src/bin/ssher.rs"
+test = false
 
 [dependencies]
 anyhow = "1.0.86"

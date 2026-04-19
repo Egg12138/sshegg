@@ -7,12 +7,13 @@ use crate::ssh::{AuthConfig, SshConnection};
 
 use crate::model::Session;
 use crate::password;
-use crate::store::{JsonFileStore, StoreConfig, resolve_store_path};
+use crate::store::{JsonFileStore, resolve_store_path};
 use crate::ui;
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::io;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -24,7 +25,7 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    #[arg(long, env = "SSHER_STORE")]
+    #[arg(long = "store-path", visible_alias = "store", env = "SSHER_STORE")]
     store_path: Option<PathBuf>,
     #[arg(long, env = "SSHER_UI_CONFIG")]
     ui_config: Option<PathBuf>,
@@ -310,7 +311,7 @@ fn add_session(store: &JsonFileStore, args: AddArgs) -> Result<()> {
     if args.no_password {
         session.has_stored_password = false;
     } else if args.password {
-        let pwd = rpassword::prompt_password(format!("Enter password for {}: ", session.name))?;
+        let pwd = prompt_password_value(format!("Enter password for {}: ", session.name))?;
 
         // Determine effective password mode
         let config = store.get_config()?;
@@ -355,10 +356,11 @@ fn list_sessions(store: &JsonFileStore, cli_config: Option<PathBuf>) -> Result<(
 
 fn export_sessions(store: &JsonFileStore, args: ExportArgs) -> Result<()> {
     let sessions = store.list()?;
+    let sanitized_sessions = sanitize_export_sessions(&sessions);
     let output = match args.format {
-        ExportFormat::Json => export_to_json(&sessions)?,
-        ExportFormat::Csv => export_to_csv(&sessions),
-        ExportFormat::SshConfig => export_to_ssh_config(&sessions),
+        ExportFormat::Json => export_to_json(&sanitized_sessions)?,
+        ExportFormat::Csv => export_to_csv(&sanitized_sessions),
+        ExportFormat::SshConfig => export_to_ssh_config(&sanitized_sessions),
     };
 
     if let Some(path) = args.output {
@@ -369,6 +371,17 @@ fn export_sessions(store: &JsonFileStore, args: ExportArgs) -> Result<()> {
         print!("{}", output);
     }
     Ok(())
+}
+
+fn sanitize_export_sessions(sessions: &[Session]) -> Vec<Session> {
+    sessions
+        .iter()
+        .cloned()
+        .map(|mut session| {
+            session.stored_password = None;
+            session
+        })
+        .collect()
 }
 
 fn export_to_json(sessions: &[Session]) -> Result<String> {
@@ -735,19 +748,16 @@ fn update_session(store: &JsonFileStore, args: UpdateArgs) -> Result<()> {
         session.has_stored_password = false;
     } else if args.password {
         // Update stored password
-        let pwd = rpassword::prompt_password(format!("Enter new password for {}: ", args.name))?;
+        let pwd = prompt_password_value(format!("Enter new password for {}: ", args.name))?;
 
         // Determine effective password mode
         let config = store.get_config()?;
-        let effective_mode = args
-            .passwd_mode
-            .map(|m| m.into())
-            .unwrap_or_else(|| {
-                session
-                    .passwd_unsafe_mode
-                    .clone()
-                    .unwrap_or(config.passwd_unsafe_mode.clone())
-            });
+        let effective_mode = args.passwd_mode.map(|m| m.into()).unwrap_or_else(|| {
+            session
+                .passwd_unsafe_mode
+                .clone()
+                .unwrap_or(config.passwd_unsafe_mode.clone())
+        });
 
         // Update session's passwd_unsafe_mode if specified
         if args.passwd_mode.is_some() {
@@ -811,40 +821,19 @@ fn auth_config_for_session(session: &Session) -> AuthConfig {
     }
 }
 
-/// Get the password for a session, considering the storage mode
-fn get_session_password(
-    store: &JsonFileStore,
-    session: &Session,
-) -> Result<Option<String>> {
-    if !session.has_stored_password {
-        return Ok(None);
+fn prompt_password_value(prompt: String) -> Result<String> {
+    if io::stdin().is_terminal() {
+        return rpassword::prompt_password(prompt).context("failed to read password from terminal");
     }
 
-    let config = store.get_config()?;
-    let effective_mode = session
-        .passwd_unsafe_mode
-        .as_ref()
-        .unwrap_or(&config.passwd_unsafe_mode);
-
-    match effective_mode {
-        PasswdUnsafeMode::Normal => password::get_password(&session.name),
-        PasswdUnsafeMode::Bare => {
-            Ok(session.stored_password.clone())
-        }
-        PasswdUnsafeMode::Simple => {
-            match &session.stored_password {
-                Some(encoded) => {
-                    password::get_unsafe_password(
-                        encoded,
-                        &PasswdUnsafeMode::Simple,
-                        config.passwd_unsafe_key.as_deref(),
-                    )
-                    .map(Some)
-                }
-                None => Ok(None),
-            }
-        }
+    let mut password = String::new();
+    io::stdin()
+        .read_line(&mut password)
+        .context("failed to read password from stdin")?;
+    while matches!(password.chars().last(), Some('\n' | '\r')) {
+        password.pop();
     }
+    Ok(password)
 }
 
 fn run_ssh(session: &Session) -> Result<()> {
@@ -935,7 +924,7 @@ fn handle_config_command(store: &JsonFileStore, args: ConfigArgs) -> Result<()> 
                             return Err(anyhow!(
                                 "Invalid value '{}' for passwd_unsafe_mode. Valid values: normal, bare, simple",
                                 value
-                            ))
+                            ));
                         }
                     };
                     config.passwd_unsafe_mode = mode;
@@ -949,7 +938,7 @@ fn handle_config_command(store: &JsonFileStore, args: ConfigArgs) -> Result<()> 
                     return Err(anyhow!(
                         "Unknown config key '{}'. Valid keys: passwd_unsafe_mode, passwd_unsafe_key",
                         key
-                    ))
+                    ));
                 }
             }
             store.set_config(&config)?;
@@ -982,21 +971,28 @@ fn handle_config_command(store: &JsonFileStore, args: ConfigArgs) -> Result<()> 
                     return Err(anyhow!(
                         "Unknown config key '{}'. Valid keys: passwd_unsafe_mode, passwd_unsafe_key",
                         key
-                    ))
+                    ));
                 }
             }
             Ok(())
         }
         ConfigCommand::List => {
             let config = store.get_config()?;
-            println!("passwd_unsafe_mode: {}", match config.passwd_unsafe_mode {
-                PasswdUnsafeMode::Normal => "normal",
-                PasswdUnsafeMode::Bare => "bare",
-                PasswdUnsafeMode::Simple => "simple",
-            });
+            println!(
+                "passwd_unsafe_mode: {}",
+                match config.passwd_unsafe_mode {
+                    PasswdUnsafeMode::Normal => "normal",
+                    PasswdUnsafeMode::Bare => "bare",
+                    PasswdUnsafeMode::Simple => "simple",
+                }
+            );
             match &config.passwd_unsafe_key {
                 Some(key) => {
-                    println!("passwd_unsafe_key: {} (length: {} chars)", "*".repeat(8), key.len());
+                    println!(
+                        "passwd_unsafe_key: {} (length: {} chars)",
+                        "*".repeat(8),
+                        key.len()
+                    );
                 }
                 None => {
                     println!("passwd_unsafe_key: <not set>");
