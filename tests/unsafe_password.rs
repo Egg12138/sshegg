@@ -1,4 +1,9 @@
 use assert_cmd::Command;
+
+fn se_cmd() -> Command {
+    assert_cmd::cargo::cargo_bin_cmd!("se")
+}
+
 use predicates::prelude::*;
 use tempfile::tempdir;
 
@@ -14,8 +19,7 @@ fn setup_temp_store() -> (tempfile::TempDir, std::path::PathBuf) {
 fn config_set_passwd_unsafe_mode_normal() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -33,8 +37,7 @@ fn config_set_passwd_unsafe_mode_normal() {
 fn config_set_passwd_unsafe_mode_bare() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -52,8 +55,7 @@ fn config_set_passwd_unsafe_mode_bare() {
 fn config_set_passwd_unsafe_mode_simple() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -71,8 +73,7 @@ fn config_set_passwd_unsafe_mode_simple() {
 fn config_set_passwd_unsafe_mode_invalid() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -90,8 +91,7 @@ fn config_set_passwd_unsafe_mode_invalid() {
 fn config_get_passwd_unsafe_mode_default() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -109,8 +109,7 @@ fn config_set_and_get_passwd_unsafe_key() {
     let (_dir, store_path) = setup_temp_store();
 
     // Set key
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -126,8 +125,7 @@ fn config_set_and_get_passwd_unsafe_key() {
         ));
 
     // Get key (should be masked)
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -144,8 +142,7 @@ fn config_set_and_get_passwd_unsafe_key() {
 fn config_list_shows_all_settings() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args(["--store", store_path.to_str().unwrap(), "config", "list"])
         .assert()
         .success()
@@ -157,8 +154,7 @@ fn config_list_shows_all_settings() {
 fn config_unknown_key_fails() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -177,8 +173,7 @@ fn add_with_passwd_mode_bare() {
     let (_dir, store_path) = setup_temp_store();
 
     // Set global mode to bare
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -191,8 +186,7 @@ fn add_with_passwd_mode_bare() {
         .success();
 
     // Add session with bare mode password
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -216,8 +210,7 @@ fn add_with_passwd_mode_simple_requires_key() {
     let (_dir, store_path) = setup_temp_store();
 
     // Don't set passwd_unsafe_key - should fail when trying to use simple mode
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .env("SSHER_UNSAFE_KEY", "") // Clear any env key
         .args([
             "--store",
@@ -243,8 +236,7 @@ fn add_with_passwd_mode_simple_requires_key() {
 fn add_with_passwd_mode_simple_with_env_key() {
     let (_dir, store_path) = setup_temp_store();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .env("SSHER_UNSAFE_KEY", "my-encryption-key")
         .args([
             "--store",
@@ -280,16 +272,14 @@ fn migrates_old_array_format() {
     .expect("write");
 
     // Read should work and auto-migrate
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args(["--store", store_path.to_str().unwrap(), "list"])
         .assert()
         .success()
         .stdout(predicate::str::contains("office"));
 
     // Config should be default
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -308,8 +298,7 @@ fn new_format_has_sessions_key() {
     let (_dir, store_path) = setup_temp_store();
 
     // Add a session
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -338,8 +327,7 @@ fn update_preserves_unsafe_mode() {
     let (_dir, store_path) = setup_temp_store();
 
     // Add with bare mode
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -351,8 +339,7 @@ fn update_preserves_unsafe_mode() {
         .assert()
         .success();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -370,8 +357,7 @@ fn update_preserves_unsafe_mode() {
         .success();
 
     // Update host (should preserve password mode)
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -385,8 +371,7 @@ fn update_preserves_unsafe_mode() {
         .success();
 
     // Verify update worked
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args(["--store", store_path.to_str().unwrap(), "list"])
         .assert()
         .success()
@@ -399,8 +384,7 @@ fn export_excludes_stored_password() {
     let (_dir, store_path) = setup_temp_store();
 
     // Add session with password in bare mode
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -412,8 +396,7 @@ fn export_excludes_stored_password() {
         .assert()
         .success();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -431,8 +414,7 @@ fn export_excludes_stored_password() {
         .success();
 
     // Export to JSON
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -453,8 +435,7 @@ fn remove_password_clears_unsafe_storage() {
     let (_dir, store_path) = setup_temp_store();
 
     // Add with bare mode
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -466,8 +447,7 @@ fn remove_password_clears_unsafe_storage() {
         .assert()
         .success();
 
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),
@@ -485,8 +465,7 @@ fn remove_password_clears_unsafe_storage() {
         .success();
 
     // Remove password
-    Command::cargo_bin("se")
-        .unwrap()
+    se_cmd()
         .args([
             "--store",
             store_path.to_str().unwrap(),

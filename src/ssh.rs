@@ -59,6 +59,33 @@ fn poll_shell_fds(
     }
 }
 
+fn current_pty_size() -> Option<(u32, u32)> {
+    crossterm::terminal::size()
+        .ok()
+        .map(|(cols, rows)| (u32::from(cols), u32::from(rows)))
+}
+
+fn sync_pty_size_if_needed<F>(
+    last_size: &mut Option<(u32, u32)>,
+    current_size: Option<(u32, u32)>,
+    mut request_resize: F,
+) -> Result<bool>
+where
+    F: FnMut(u32, u32) -> Result<()>,
+{
+    let Some((cols, rows)) = current_size else {
+        return Ok(false);
+    };
+
+    if *last_size == Some((cols, rows)) {
+        return Ok(false);
+    }
+
+    request_resize(cols, rows)?;
+    *last_size = Some((cols, rows));
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AuthMethodHints {
     publickey: bool,
@@ -562,7 +589,7 @@ impl SshConnection {
     }
 
     pub fn shell(&mut self) -> Result<()> {
-        use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
+        use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
         use std::io::{Read, Write};
 
         let mut channel = self
@@ -570,10 +597,8 @@ impl SshConnection {
             .channel_session()
             .context("failed to open SSH channel")?;
 
-        // Get local terminal dimensions and pass to PTY request
-        let pty_dims = size()
-            .ok()
-            .map(|(cols, rows)| (cols as u32, rows as u32, 0, 0));
+        let mut synced_pty_size = current_pty_size();
+        let pty_dims = synced_pty_size.map(|(cols, rows)| (cols, rows, 0, 0));
 
         channel
             .request_pty("xterm-256color", None, pty_dims)
@@ -604,6 +629,16 @@ impl SshConnection {
         let shell_result = (|| -> Result<()> {
             loop {
                 let mut progressed = false;
+
+                progressed |= sync_pty_size_if_needed(
+                    &mut synced_pty_size,
+                    current_pty_size(),
+                    |cols, rows| {
+                        channel
+                            .request_pty_size(cols, rows, None, None)
+                            .context("failed to update SSH PTY size")
+                    },
+                )?;
 
                 loop {
                     match channel_stdout.read(&mut stdout_buffer) {
@@ -861,5 +896,37 @@ mod tests {
             suggestions,
             vec!["/var/local/".to_string(), "/var/log/".to_string()]
         );
+    }
+
+    #[test]
+    fn sync_pty_size_if_needed_requests_resize_when_terminal_size_changes() {
+        let mut last_size = Some((80, 24));
+        let mut requested = Vec::new();
+
+        let changed = sync_pty_size_if_needed(&mut last_size, Some((120, 40)), |cols, rows| {
+            requested.push((cols, rows));
+            Ok(())
+        })
+        .expect("resize sync should succeed");
+
+        assert!(changed);
+        assert_eq!(requested, vec![(120, 40)]);
+        assert_eq!(last_size, Some((120, 40)));
+    }
+
+    #[test]
+    fn sync_pty_size_if_needed_skips_duplicate_terminal_sizes() {
+        let mut last_size = Some((120, 40));
+        let mut requested = Vec::new();
+
+        let changed = sync_pty_size_if_needed(&mut last_size, Some((120, 40)), |cols, rows| {
+            requested.push((cols, rows));
+            Ok(())
+        })
+        .expect("duplicate resize check should succeed");
+
+        assert!(!changed);
+        assert!(requested.is_empty());
+        assert_eq!(last_size, Some((120, 40)));
     }
 }

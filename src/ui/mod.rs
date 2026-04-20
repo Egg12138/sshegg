@@ -921,20 +921,20 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut AppState, config: &UiConfig, th
         frame.render_widget(info, chunks[index]);
     }
 
-    if app.mode() == InputMode::ConfirmDelete {
-        if let Some(dialog) = app.delete_dialog() {
-            render_popup_panel(
-                frame,
-                size,
-                theme,
-                build_text_entry_popup(
-                    dialog.entry(),
-                    &[format!("Delete session: {}", dialog.target())],
-                    60,
-                    30,
-                ),
-            );
-        }
+    if app.mode() == InputMode::ConfirmDelete
+        && let Some(dialog) = app.delete_dialog()
+    {
+        render_popup_panel(
+            frame,
+            size,
+            theme,
+            build_text_entry_popup(
+                dialog.entry(),
+                &[format!("Delete session: {}", dialog.target())],
+                60,
+                30,
+            ),
+        );
     }
 
     if app.mode() == InputMode::AddSession

@@ -425,8 +425,10 @@ mod tests {
 
     #[test]
     fn effective_passwd_mode_uses_session_override() {
-        let mut data = SessionStoreData::default();
-        data.passwd_unsafe_mode = PasswdUnsafeMode::Bare;
+        let data = SessionStoreData {
+            passwd_unsafe_mode: PasswdUnsafeMode::Bare,
+            ..SessionStoreData::default()
+        };
 
         let session_with_override = Session {
             name: "test".to_string(),

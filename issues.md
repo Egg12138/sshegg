@@ -10,8 +10,6 @@ When working on currently severe defects or newly prioritized transfer/terminal 
   https://github.com/Egg12138/sshegg/issues/16
 - #18 Support wildcard and glob patterns in SCP paths(TUI)
   https://github.com/Egg12138/sshegg/issues/18
-- #19 Propagate native terminal resize events to remote full-screen sessions (TUI)
-  https://github.com/Egg12138/sshegg/issues/19
 
 ## Usage
 

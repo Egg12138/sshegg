@@ -113,12 +113,12 @@ impl JsonFileStore {
             .with_context(|| format!("unable to parse store {}", self.path.display()))?;
 
         // Check if it's the new format (has "sessions" key at root)
-        if let Some(obj) = parsed.as_object() {
-            if obj.contains_key("sessions") {
-                let store_data: SessionStoreData = serde_json::from_value(parsed)
-                    .with_context(|| format!("unable to parse store {}", self.path.display()))?;
-                return Ok(store_data);
-            }
+        if let Some(obj) = parsed.as_object()
+            && obj.contains_key("sessions")
+        {
+            let store_data: SessionStoreData = serde_json::from_value(parsed)
+                .with_context(|| format!("unable to parse store {}", self.path.display()))?;
+            return Ok(store_data);
         }
 
         // Old format: root is an array of sessions - migrate it

@@ -119,10 +119,10 @@ pub fn has_password(session_name: &str) -> Result<bool> {
 /// Resolution order: SSHER_UNSAFE_KEY env var → passwd_unsafe_key from config
 pub fn get_encryption_key(config_key: Option<&str>) -> Result<String> {
     // First check environment variable
-    if let Ok(key) = env::var(UNSAFE_KEY_ENV_VAR) {
-        if !key.is_empty() {
-            return Ok(key);
-        }
+    if let Ok(key) = env::var(UNSAFE_KEY_ENV_VAR)
+        && !key.is_empty()
+    {
+        return Ok(key);
     }
 
     // Fall back to config key
