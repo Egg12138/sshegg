@@ -155,6 +155,60 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, candi
     }
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn parse_remote_completion_input(input: &str) -> (String, String) {
+    if input.is_empty() {
+        return (".".to_string(), String::new());
+    }
+
+    if input == "/" {
+        return ("/".to_string(), String::new());
+    }
+
+    if let Some(directory) = input.strip_suffix('/') {
+        if directory.is_empty() {
+            return ("/".to_string(), String::new());
+        }
+        return (directory.to_string(), String::new());
+    }
+
+    if let Some((directory, prefix)) = input.rsplit_once('/') {
+        if directory.is_empty() {
+            return ("/".to_string(), prefix.to_string());
+        }
+        return (directory.to_string(), prefix.to_string());
+    }
+
+    (".".to_string(), input.to_string())
+}
+
+fn build_remote_suggestions(
+    directory: &str,
+    prefix: &str,
+    entries: &[(String, bool)],
+) -> Vec<String> {
+    let mut suggestions = entries
+        .iter()
+        .filter(|(name, _)| name.starts_with(prefix))
+        .map(|(name, is_dir)| {
+            let mut path = match directory {
+                "." => name.clone(),
+                "/" => format!("/{name}"),
+                _ => format!("{directory}/{name}"),
+            };
+            if *is_dir {
+                path.push('/');
+            }
+            path
+        })
+        .collect::<Vec<_>>();
+    suggestions.sort();
+    suggestions
+}
+
 fn discover_identity_files_in_dir(ssh_dir: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
@@ -487,6 +541,26 @@ impl SshConnection {
         Ok(output)
     }
 
+    pub fn list_remote_path_suggestions(&mut self, input: &str) -> Result<Vec<String>> {
+        let (directory, prefix) = parse_remote_completion_input(input);
+        let script = format!(
+            "LC_ALL=C find {} -maxdepth 1 -mindepth 1 -printf '%f\\t%y\\n' 2>/dev/null",
+            shell_quote(&directory)
+        );
+        let command = format!("sh -lc {}", shell_quote(&script));
+        let output = self.exec(&command)?;
+
+        let entries = output
+            .lines()
+            .filter_map(|line| {
+                let (name, kind) = line.split_once('\t')?;
+                Some((name.to_string(), kind == "d"))
+            })
+            .collect::<Vec<_>>();
+
+        Ok(build_remote_suggestions(&directory, &prefix, &entries))
+    }
+
     pub fn shell(&mut self) -> Result<()> {
         use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
         use std::io::{Read, Write};
@@ -753,5 +827,39 @@ mod tests {
     fn invalid_password_error_detection_ignores_unrelated_errors() {
         let err = anyhow!("server does not advertise password authentication");
         assert!(!is_likely_invalid_password_error(&err));
+    }
+
+    #[test]
+    fn remote_path_query_splits_directory_and_prefix() {
+        assert_eq!(
+            parse_remote_completion_input("/var/lo"),
+            ("/var".to_string(), "lo".to_string())
+        );
+        assert_eq!(
+            parse_remote_completion_input("/var/log/"),
+            ("/var/log".to_string(), "".to_string())
+        );
+        assert_eq!(
+            parse_remote_completion_input("notes"),
+            (".".to_string(), "notes".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_completion_candidates_filter_and_mark_directories() {
+        let suggestions = build_remote_suggestions(
+            "/var",
+            "lo",
+            &[
+                ("log".to_string(), true),
+                ("local".to_string(), true),
+                ("tmp".to_string(), true),
+            ],
+        );
+
+        assert_eq!(
+            suggestions,
+            vec!["/var/local/".to_string(), "/var/log/".to_string()]
+        );
     }
 }

@@ -134,6 +134,7 @@ cargo run -- tui
 - Pasted drafts keep host/user/port/identity/tags, but do not copy keyring passwords automatically; enter a new password if needed.
 - `dd` starts delete confirmation; type the exact session name and hit `Enter`.
 - `s` launches the SCP helper for the selected session.
+- In the SCP helper, type into the local or remote path fields to refresh suggestions, use `Up`/`Down` to choose a candidate, and press `Tab` to apply the current suggestion before advancing.
 - `m` toggles the monitor panel (active PIDs + last-connected).
 - The bottom operation bar now combines the status line with the cheat sheet; if the focus line feels cramped, bump `layout.status_height` and keep `layout.help_height` sized for the help and navigation hints.
 

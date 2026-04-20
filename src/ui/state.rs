@@ -792,10 +792,14 @@ pub struct ScpForm {
     pub recursive: bool,
     field: ScpField,
     password_prompt: Option<TextEntryPanel>,
+    local_suggestions: Vec<String>,
+    remote_suggestions: Vec<String>,
+    local_selected_suggestion: Option<usize>,
+    remote_selected_suggestion: Option<usize>,
 }
 
 impl ScpForm {
-    fn new(session: Session) -> Self {
+    pub(crate) fn new(session: Session) -> Self {
         Self {
             session,
             local_path: String::new(),
@@ -804,6 +808,10 @@ impl ScpForm {
             recursive: false,
             field: ScpField::Local,
             password_prompt: None,
+            local_suggestions: Vec::new(),
+            remote_suggestions: Vec::new(),
+            local_selected_suggestion: None,
+            remote_selected_suggestion: None,
         }
     }
 
@@ -854,6 +862,105 @@ impl ScpForm {
 
     pub fn password_prompt_mut(&mut self) -> Option<&mut TextEntryPanel> {
         self.password_prompt.as_mut()
+    }
+
+    pub fn set_local_suggestions(&mut self, suggestions: Vec<String>) {
+        self.local_suggestions = suggestions;
+        self.local_selected_suggestion = (!self.local_suggestions.is_empty()).then_some(0);
+    }
+
+    pub fn set_remote_suggestions(&mut self, suggestions: Vec<String>) {
+        self.remote_suggestions = suggestions;
+        self.remote_selected_suggestion = (!self.remote_suggestions.is_empty()).then_some(0);
+    }
+
+    pub fn clear_active_suggestions(&mut self) {
+        match self.field {
+            ScpField::Local => self.set_local_suggestions(Vec::new()),
+            ScpField::Remote => self.set_remote_suggestions(Vec::new()),
+            _ => {}
+        }
+    }
+
+    pub fn active_suggestions(&self) -> &[String] {
+        match self.field {
+            ScpField::Local => &self.local_suggestions,
+            ScpField::Remote => &self.remote_suggestions,
+            _ => &[],
+        }
+    }
+
+    pub fn selected_suggestion_index(&self) -> Option<usize> {
+        match self.field {
+            ScpField::Local => self.local_selected_suggestion,
+            ScpField::Remote => self.remote_selected_suggestion,
+            _ => None,
+        }
+    }
+
+    pub fn selected_suggestion(&self) -> Option<&str> {
+        let index = self.selected_suggestion_index()?;
+        self.active_suggestions().get(index).map(String::as_str)
+    }
+
+    pub fn select_next_suggestion(&mut self) {
+        let len = self.active_suggestions().len();
+        if len == 0 {
+            return;
+        }
+
+        let next = match self.selected_suggestion_index() {
+            Some(index) => (index + 1) % len,
+            None => 0,
+        };
+
+        match self.field {
+            ScpField::Local => self.local_selected_suggestion = Some(next),
+            ScpField::Remote => self.remote_selected_suggestion = Some(next),
+            _ => {}
+        }
+    }
+
+    pub fn select_prev_suggestion(&mut self) {
+        let len = self.active_suggestions().len();
+        if len == 0 {
+            return;
+        }
+
+        let prev = match self.selected_suggestion_index() {
+            Some(0) | None => len - 1,
+            Some(index) => index - 1,
+        };
+
+        match self.field {
+            ScpField::Local => self.local_selected_suggestion = Some(prev),
+            ScpField::Remote => self.remote_selected_suggestion = Some(prev),
+            _ => {}
+        }
+    }
+
+    pub fn apply_selected_suggestion(&mut self) -> bool {
+        let Some(suggestion) = self.selected_suggestion().map(str::to_string) else {
+            return false;
+        };
+
+        match self.field {
+            ScpField::Local => {
+                if self.local_path == suggestion {
+                    return false;
+                }
+                self.local_path = suggestion;
+            }
+            ScpField::Remote => {
+                if self.remote_path == suggestion {
+                    return false;
+                }
+                self.remote_path = suggestion;
+            }
+            _ => return false,
+        }
+
+        true
     }
 }
 
@@ -1027,5 +1134,43 @@ mod tests {
         assert_eq!(prompt.prompt(), "Password for alice@example.com");
         assert_eq!(prompt.footer_hint(), "[Enter] Transfer | [Esc] Cancel");
         assert_eq!(prompt.display_value(), "");
+    }
+
+    #[test]
+    fn scp_form_applies_local_autocomplete_suggestion() {
+        let session = sample_session("office");
+        let mut form = ScpForm::new(session);
+        form.local_path = "./Doc".to_string();
+        form.set_local_suggestions(vec!["./Docs/".to_string(), "./Dockerfile".to_string()]);
+
+        assert_eq!(form.active_suggestions(), &["./Docs/", "./Dockerfile"]);
+        assert_eq!(form.selected_suggestion_index(), Some(0));
+
+        assert!(form.apply_selected_suggestion());
+        assert_eq!(form.local_path, "./Docs/");
+    }
+
+    #[test]
+    fn scp_form_keeps_remote_suggestions_separate_from_local_state() {
+        let session = sample_session("office");
+        let mut form = ScpForm::new(session);
+        form.local_path = "./Doc".to_string();
+        form.set_local_suggestions(vec!["./Docs/".to_string()]);
+
+        form.next_field();
+        form.remote_path = "/var/lo".to_string();
+        form.set_remote_suggestions(vec!["/var/log/".to_string(), "/var/local/".to_string()]);
+
+        assert_eq!(form.active_suggestions(), &["/var/log/", "/var/local/"]);
+        assert_eq!(form.selected_suggestion_index(), Some(0));
+
+        form.select_next_suggestion();
+        assert_eq!(form.selected_suggestion_index(), Some(1));
+        assert!(form.apply_selected_suggestion());
+        assert_eq!(form.remote_path, "/var/local/");
+
+        form.prev_field();
+        assert_eq!(form.active_suggestions(), &["./Docs/"]);
+        assert_eq!(form.selected_suggestion_index(), Some(0));
     }
 }

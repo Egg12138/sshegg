@@ -40,6 +40,7 @@ Check `issues.md` first for the current urgent defect backlog and the correspond
 
 ## Plans
 The subsections in this section are intentionally stable and machine-parseable. Scripts may parse the `###` headings and the bullet lists under them directly.
+Hooks: after issue, requirements are fixed or finished, update AGENTS.md: Progress and Goals sections (if nessacary), update issues.md if an issues is fixed
 
 ### Goals
 - Vim-style TUI operation aligned with `~/source/todaycli`.
@@ -70,15 +71,14 @@ The subsections in this section are intentionally stable and machine-parseable. 
 - Documentation updated for usage and config.
 - Password authentication infrastructure (Phase 1): keyring integration, model updates.
 - Password authentication CLI support (Phase 2): ssh2 backend, --password/--no-password flags, remove-password command.
+- TUI SCP local/remote path autocomplete with inline candidate lists and tab completion.
 
 ### Current Severe Defects
 - `se` SCP password input UX is currently confusing and unreliable; this is a severe usability defect and needs a clear, well-bounded password entry UI.
-- `se` SCP file/path selection currently lacks the required autocomplete workflow, making send/receive flows too error-prone.
 - `se` SCP path handling currently needs wildcard matching support so users can target multiple files naturally.
 - Remote connection screen sizing is currently broken in terminal-emulation mode: after opening interactive apps like `vim`, resizing the local terminal does not propagate a native size update, leaving the remote display stuck at a smaller viewport.
 
 ### Updated Requirements
 - Add an explicit, clean password-entry interface for SCP flows, with clear visual boundaries and predictable focus/submit behavior.
-- Add autocomplete for SCP file selection, covering both path entry and interactive picking workflows where applicable.
 - Support wildcard matching in SCP source/target paths.
 - Ensure remote terminal sessions propagate resize events correctly so full-screen apps always render at the current terminal size.

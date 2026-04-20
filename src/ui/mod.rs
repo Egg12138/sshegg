@@ -7,6 +7,7 @@ mod state;
 use crate::auth::resolve_session_password;
 use crate::model::{PasswdUnsafeMode, Session};
 use crate::password;
+use crate::ssh::{AuthConfig, SshConnection};
 use crate::store::SessionStore;
 use crate::ui::state::{
     AddField, AddSessionForm, AppState, FormEditMode, InputMode, MonitorEntry, ScpDirection,
@@ -597,6 +598,7 @@ fn handle_scp_key(
     key: KeyEvent,
 ) -> Result<Option<Option<Session>>> {
     let mut submit_password = false;
+    let mut refresh_autocomplete = false;
     {
         let Some(form) = app.scp_form_mut() else {
             app.cancel_scp();
@@ -623,14 +625,36 @@ fn handle_scp_key(
                     app.cancel_scp();
                     app.clear_status();
                 }
-                KeyCode::Tab => form.next_field(),
-                KeyCode::BackTab => form.prev_field(),
+                KeyCode::Tab => {
+                    if matches!(field, ScpField::Local | ScpField::Remote)
+                        && form.apply_selected_suggestion()
+                    {
+                        refresh_autocomplete = true;
+                    } else {
+                        form.next_field();
+                        refresh_autocomplete =
+                            matches!(form.field(), ScpField::Local | ScpField::Remote);
+                    }
+                }
+                KeyCode::BackTab => {
+                    form.prev_field();
+                    refresh_autocomplete =
+                        matches!(form.field(), ScpField::Local | ScpField::Remote);
+                }
                 KeyCode::Enter => {
                     if field == ScpField::Recursive {
                         submit_scp(app, store)?;
                     } else {
                         form.next_field();
+                        refresh_autocomplete =
+                            matches!(form.field(), ScpField::Local | ScpField::Remote);
                     }
+                }
+                KeyCode::Up if matches!(field, ScpField::Local | ScpField::Remote) => {
+                    form.select_prev_suggestion();
+                }
+                KeyCode::Down if matches!(field, ScpField::Local | ScpField::Remote) => {
+                    form.select_next_suggestion();
                 }
                 KeyCode::Left | KeyCode::Right | KeyCode::Char('t') | KeyCode::Char(' ')
                     if field == ScpField::Direction =>
@@ -645,6 +669,7 @@ fn handle_scp_key(
                 KeyCode::Backspace => {
                     if let Some(value) = form.active_editable_mut() {
                         value.pop();
+                        refresh_autocomplete = true;
                     }
                 }
                 KeyCode::Char(ch)
@@ -653,11 +678,16 @@ fn handle_scp_key(
                 {
                     if let Some(value) = form.active_editable_mut() {
                         value.push(ch);
+                        refresh_autocomplete = true;
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    if refresh_autocomplete {
+        update_scp_autocomplete(app, store)?;
     }
 
     if submit_password {
@@ -1388,6 +1418,19 @@ fn build_scp_form_lines(form: &ScpForm, show_inline_caret: bool) -> Vec<String> 
             None
         },
     ));
+    if !form.active_suggestions().is_empty() {
+        lines.push("  Suggestions:".to_string());
+        for (index, suggestion) in form.active_suggestions().iter().take(5).enumerate() {
+            let marker = if form.selected_suggestion_index() == Some(index) {
+                "->"
+            } else {
+                "  "
+            };
+            lines.push(format!("  {marker} {suggestion}"));
+        }
+    }
+    lines.push("  Tab applies the selected suggestion, then moves on".to_string());
+    lines.push("  Up/Down cycle path suggestions".to_string());
     lines.push("  Space toggles Direction/Recursive".to_string());
     lines.push("  Enter starts a password panel before transfer".to_string());
     lines
@@ -1862,6 +1905,119 @@ fn write_askpass_script() -> Result<PathBuf> {
     Ok(path)
 }
 
+fn auth_config_for_tui_session(store: &dyn SessionStore, session: &Session) -> Result<AuthConfig> {
+    let password = match resolve_session_password(store, session) {
+        Ok(password) => password,
+        Err(err) if password::is_backend_unavailable_error(&err) => None,
+        Err(err) => return Err(err),
+    };
+
+    Ok(AuthConfig {
+        identity_file: session
+            .identity_file
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        password_from_keyring: false,
+        password,
+        no_password: false,
+        allow_manual_password_prompt: false,
+        session_name: Some(session.name.clone()),
+    })
+}
+
+fn local_path_suggestions(input: &str) -> Vec<String> {
+    if input.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let expanded = expand_tilde(input);
+    let path = PathBuf::from(&expanded);
+    let (dir, prefix) = if expanded.ends_with('/') {
+        (path, String::new())
+    } else if let Some(parent) = path.parent() {
+        let prefix = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (parent.to_path_buf(), prefix)
+    } else {
+        (PathBuf::from("."), expanded.clone())
+    };
+
+    let mut suggestions = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+
+            let mut suggestion = dir.join(&name).display().to_string();
+            if entry.path().is_dir() {
+                suggestion.push('/');
+            }
+            suggestions.push(suggestion);
+        }
+    }
+    suggestions.sort();
+    suggestions
+}
+
+fn remote_path_suggestions(
+    store: &dyn SessionStore,
+    session: &Session,
+    input: &str,
+) -> Result<Vec<String>> {
+    if input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let auth_config = auth_config_for_tui_session(store, session)?;
+    let mut connection =
+        SshConnection::connect(&session.host, session.port, &session.user, &auth_config)?;
+    connection.list_remote_path_suggestions(input)
+}
+
+fn update_scp_autocomplete(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {
+    let Some(form) = app.scp_form() else {
+        return Ok(());
+    };
+
+    let field = form.field();
+    let session = form.session.clone();
+    let local_input = form.local_path.clone();
+    let remote_input = form.remote_path.clone();
+
+    match field {
+        ScpField::Local => {
+            let suggestions = local_path_suggestions(&local_input);
+            if let Some(form) = app.scp_form_mut() {
+                form.set_local_suggestions(suggestions);
+            }
+        }
+        ScpField::Remote => match remote_path_suggestions(store, &session, &remote_input) {
+            Ok(suggestions) => {
+                if let Some(form) = app.scp_form_mut() {
+                    form.set_remote_suggestions(suggestions);
+                }
+            }
+            Err(err) => {
+                if let Some(form) = app.scp_form_mut() {
+                    form.set_remote_suggestions(Vec::new());
+                }
+                app.set_status(format!("Remote autocomplete unavailable: {err}"));
+            }
+        },
+        _ => {
+            if let Some(form) = app.scp_form_mut() {
+                form.clear_active_suggestions();
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn update_identity_state(form: &mut AddSessionForm) {
     let input = form.identity_file.trim();
     if input.is_empty() {
@@ -2003,8 +2159,24 @@ fn default_user() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_text_entry_popup;
-    use crate::ui::state::TextEntryPanel;
+    use super::{build_scp_form_lines, build_text_entry_popup};
+    use crate::model::Session;
+    use crate::ui::state::{ScpForm, TextEntryPanel};
+
+    fn sample_session() -> Session {
+        Session {
+            name: "office".to_string(),
+            host: "example.com".to_string(),
+            user: "alice".to_string(),
+            port: 22,
+            identity_file: None,
+            tags: vec!["prod".to_string()],
+            last_connected_at: None,
+            has_stored_password: false,
+            passwd_unsafe_mode: None,
+            stored_password: None,
+        }
+    }
 
     #[test]
     fn text_entry_popup_separates_hints_from_input_area() {
@@ -2040,5 +2212,18 @@ mod tests {
         );
         assert_eq!(popup.accent_lines, vec![0, 1, 3, 7]);
         assert_eq!(popup.cursor.expect("cursor").line, 5);
+    }
+
+    #[test]
+    fn scp_form_lines_show_autocomplete_candidates_for_active_field() {
+        let mut form = ScpForm::new(sample_session());
+        form.local_path = "./Doc".to_string();
+        form.set_local_suggestions(vec!["./Docs/".to_string(), "./Dockerfile".to_string()]);
+
+        let lines = build_scp_form_lines(&form, true);
+
+        assert!(lines.iter().any(|line| line == "  Suggestions:"));
+        assert!(lines.iter().any(|line| line.contains("-> ./Docs/")));
+        assert!(lines.iter().any(|line| line.contains("./Dockerfile")));
     }
 }
