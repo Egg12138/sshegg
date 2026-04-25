@@ -796,6 +796,8 @@ pub struct ScpForm {
     remote_suggestions: Vec<String>,
     local_selected_suggestion: Option<usize>,
     remote_selected_suggestion: Option<usize>,
+    remote_suggestion_cache_directory: Option<String>,
+    remote_suggestion_cache_candidates: Vec<String>,
 }
 
 impl ScpForm {
@@ -812,6 +814,8 @@ impl ScpForm {
             remote_suggestions: Vec::new(),
             local_selected_suggestion: None,
             remote_selected_suggestion: None,
+            remote_suggestion_cache_directory: None,
+            remote_suggestion_cache_candidates: Vec::new(),
         }
     }
 
@@ -872,6 +876,24 @@ impl ScpForm {
     pub fn set_remote_suggestions(&mut self, suggestions: Vec<String>) {
         self.remote_suggestions = suggestions;
         self.remote_selected_suggestion = (!self.remote_suggestions.is_empty()).then_some(0);
+    }
+
+    pub fn set_remote_suggestion_cache(&mut self, directory: String, suggestions: Vec<String>) {
+        self.remote_suggestion_cache_directory = Some(directory);
+        self.remote_suggestion_cache_candidates = suggestions;
+    }
+
+    pub fn remote_suggestion_cache_directory(&self) -> Option<&str> {
+        self.remote_suggestion_cache_directory.as_deref()
+    }
+
+    pub fn remote_suggestion_cache_suggestions(&self) -> &[String] {
+        &self.remote_suggestion_cache_candidates
+    }
+
+    pub fn clear_remote_suggestion_cache(&mut self) {
+        self.remote_suggestion_cache_directory = None;
+        self.remote_suggestion_cache_candidates.clear();
     }
 
     pub fn clear_active_suggestions(&mut self) {
@@ -1172,5 +1194,40 @@ mod tests {
         form.prev_field();
         assert_eq!(form.active_suggestions(), &["./Docs/"]);
         assert_eq!(form.selected_suggestion_index(), Some(0));
+    }
+
+    #[test]
+    fn scp_form_stores_remote_suggestion_cache_by_directory() {
+        let session = sample_session("office");
+        let mut form = ScpForm::new(session);
+
+        form.set_remote_suggestion_cache(
+            "/var/log".to_string(),
+            vec![
+                "/var/log/auth.log".to_string(),
+                "/var/log/nginx/".to_string(),
+            ],
+        );
+
+        assert_eq!(form.remote_suggestion_cache_directory(), Some("/var/log"));
+        assert_eq!(
+            form.remote_suggestion_cache_suggestions(),
+            &["/var/log/auth.log", "/var/log/nginx/"]
+        );
+    }
+
+    #[test]
+    fn scp_form_clears_remote_suggestion_cache() {
+        let session = sample_session("office");
+        let mut form = ScpForm::new(session);
+        form.set_remote_suggestion_cache(
+            ".".to_string(),
+            vec!["./Downloads/".to_string(), "./Documents/".to_string()],
+        );
+
+        form.clear_remote_suggestion_cache();
+
+        assert_eq!(form.remote_suggestion_cache_directory(), None);
+        assert!(form.remote_suggestion_cache_suggestions().is_empty());
     }
 }

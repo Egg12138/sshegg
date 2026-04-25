@@ -24,6 +24,8 @@ pub struct SshConnection {
     session: Ssh2Session,
 }
 
+const REMOTE_COMPLETION_MAX_ENTRIES: usize = 256;
+
 fn poll_shell_fds(
     stdin_fd: i32,
     session_fd: i32,
@@ -234,6 +236,14 @@ fn build_remote_suggestions(
         .collect::<Vec<_>>();
     suggestions.sort();
     suggestions
+}
+
+fn remote_completion_script(directory: &str) -> String {
+    format!(
+        "LC_ALL=C find {} -maxdepth 1 -mindepth 1 -printf '%f\\t%y\\n' 2>/dev/null | head -n {}",
+        shell_quote(directory),
+        REMOTE_COMPLETION_MAX_ENTRIES
+    )
 }
 
 fn discover_identity_files_in_dir(ssh_dir: &Path) -> Vec<PathBuf> {
@@ -570,10 +580,7 @@ impl SshConnection {
 
     pub fn list_remote_path_suggestions(&mut self, input: &str) -> Result<Vec<String>> {
         let (directory, prefix) = parse_remote_completion_input(input);
-        let script = format!(
-            "LC_ALL=C find {} -maxdepth 1 -mindepth 1 -printf '%f\\t%y\\n' 2>/dev/null",
-            shell_quote(&directory)
-        );
+        let script = remote_completion_script(&directory);
         let command = format!("sh -lc {}", shell_quote(&script));
         let output = self.exec(&command)?;
 
@@ -896,6 +903,13 @@ mod tests {
             suggestions,
             vec!["/var/local/".to_string(), "/var/log/".to_string()]
         );
+    }
+
+    #[test]
+    fn remote_completion_script_applies_result_cap() {
+        let script = remote_completion_script("/var/log");
+        assert!(script.contains("head -n 256"));
+        assert!(script.contains("find '/var/log'"));
     }
 
     #[test]

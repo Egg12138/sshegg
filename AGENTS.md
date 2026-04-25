@@ -78,6 +78,7 @@ Hooks: after issue, requirements are fixed or finished, update AGENTS.md: Progre
 - Password authentication infrastructure (Phase 1): keyring integration, model updates.
 - Password authentication CLI support (Phase 2): ssh2 backend, --password/--no-password flags, remove-password command.
 - TUI SCP local/remote path autocomplete with inline candidate lists and tab completion.
+- TUI SCP remote autocomplete performance improvements: directory-scoped caching, local prefix filtering, short relative-prefix skip, and bounded remote suggestion fetches.
 - Remote terminal sessions now resync PTY size during interactive shell loops so full-screen apps track local terminal resizes.
 
 ### Current Severe Defects

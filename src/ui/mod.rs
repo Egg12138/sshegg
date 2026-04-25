@@ -1978,6 +1978,57 @@ fn remote_path_suggestions(
     connection.list_remote_path_suggestions(input)
 }
 
+fn parse_remote_autocomplete_input(input: &str) -> (String, String) {
+    if input.is_empty() {
+        return (".".to_string(), String::new());
+    }
+
+    if input == "/" {
+        return ("/".to_string(), String::new());
+    }
+
+    if let Some(directory) = input.strip_suffix('/') {
+        if directory.is_empty() {
+            return ("/".to_string(), String::new());
+        }
+        return (directory.to_string(), String::new());
+    }
+
+    if let Some((directory, prefix)) = input.rsplit_once('/') {
+        if directory.is_empty() {
+            return ("/".to_string(), prefix.to_string());
+        }
+        return (directory.to_string(), prefix.to_string());
+    }
+
+    (".".to_string(), input.to_string())
+}
+
+fn should_skip_remote_autocomplete_lookup(directory: &str, prefix: &str) -> bool {
+    const REMOTE_MIN_RELATIVE_PREFIX_LEN: usize = 2;
+    directory == "." && prefix.len() < REMOTE_MIN_RELATIVE_PREFIX_LEN
+}
+
+fn filter_remote_suggestion_candidates(
+    directory: &str,
+    prefix: &str,
+    candidates: &[String],
+) -> Vec<String> {
+    let prefix_path = match directory {
+        "." => prefix.to_string(),
+        "/" => format!("/{prefix}"),
+        _ => format!("{directory}/{prefix}"),
+    };
+
+    let mut filtered = candidates
+        .iter()
+        .filter(|candidate| candidate.starts_with(&prefix_path))
+        .cloned()
+        .collect::<Vec<_>>();
+    filtered.sort();
+    filtered
+}
+
 fn update_scp_autocomplete(app: &mut AppState, store: &dyn SessionStore) -> Result<()> {
     let Some(form) = app.scp_form() else {
         return Ok(());
@@ -1995,19 +2046,68 @@ fn update_scp_autocomplete(app: &mut AppState, store: &dyn SessionStore) -> Resu
                 form.set_local_suggestions(suggestions);
             }
         }
-        ScpField::Remote => match remote_path_suggestions(store, &session, &remote_input) {
-            Ok(suggestions) => {
+        ScpField::Remote => {
+            if remote_input.trim().is_empty() {
                 if let Some(form) = app.scp_form_mut() {
-                    form.set_remote_suggestions(suggestions);
+                    form.set_remote_suggestions(Vec::new());
+                    form.clear_remote_suggestion_cache();
                 }
+                return Ok(());
             }
-            Err(err) => {
+
+            let (directory, prefix) = parse_remote_autocomplete_input(&remote_input);
+            if should_skip_remote_autocomplete_lookup(&directory, &prefix) {
                 if let Some(form) = app.scp_form_mut() {
                     form.set_remote_suggestions(Vec::new());
                 }
-                app.set_status(format!("Remote autocomplete unavailable: {err}"));
+                return Ok(());
             }
-        },
+
+            let (cached_directory, cached_candidates) = app
+                .scp_form()
+                .map(|form| {
+                    (
+                        form.remote_suggestion_cache_directory().map(str::to_string),
+                        form.remote_suggestion_cache_suggestions().to_vec(),
+                    )
+                })
+                .unwrap_or((None, Vec::new()));
+
+            let candidates = if cached_directory.as_deref() == Some(directory.as_str()) {
+                cached_candidates
+            } else {
+                let directory_input = if directory == "/" {
+                    "/".to_string()
+                } else {
+                    format!("{directory}/")
+                };
+
+                match remote_path_suggestions(store, &session, &directory_input) {
+                    Ok(suggestions) => {
+                        if let Some(form) = app.scp_form_mut() {
+                            form.set_remote_suggestion_cache(
+                                directory.clone(),
+                                suggestions.clone(),
+                            );
+                        }
+                        suggestions
+                    }
+                    Err(err) => {
+                        if let Some(form) = app.scp_form_mut() {
+                            form.set_remote_suggestions(Vec::new());
+                            form.clear_remote_suggestion_cache();
+                        }
+                        app.set_status(format!("Remote autocomplete unavailable: {err}"));
+                        return Ok(());
+                    }
+                }
+            };
+
+            let suggestions = filter_remote_suggestion_candidates(&directory, &prefix, &candidates);
+            if let Some(form) = app.scp_form_mut() {
+                form.set_remote_suggestions(suggestions);
+            }
+        }
         _ => {
             if let Some(form) = app.scp_form_mut() {
                 form.clear_active_suggestions();
@@ -2159,7 +2259,10 @@ fn default_user() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_scp_form_lines, build_text_entry_popup};
+    use super::{
+        build_scp_form_lines, build_text_entry_popup, filter_remote_suggestion_candidates,
+        parse_remote_autocomplete_input, should_skip_remote_autocomplete_lookup,
+    };
     use crate::model::Session;
     use crate::ui::state::{ScpForm, TextEntryPanel};
 
@@ -2225,5 +2328,42 @@ mod tests {
         assert!(lines.iter().any(|line| line == "  Suggestions:"));
         assert!(lines.iter().any(|line| line.contains("-> ./Docs/")));
         assert!(lines.iter().any(|line| line.contains("./Dockerfile")));
+    }
+
+    #[test]
+    fn remote_autocomplete_parses_directory_and_prefix() {
+        assert_eq!(
+            parse_remote_autocomplete_input("/var/lo"),
+            ("/var".to_string(), "lo".to_string())
+        );
+        assert_eq!(
+            parse_remote_autocomplete_input("/var/log/"),
+            ("/var/log".to_string(), "".to_string())
+        );
+        assert_eq!(
+            parse_remote_autocomplete_input("notes"),
+            (".".to_string(), "notes".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_autocomplete_filters_cached_candidates_using_prefix() {
+        let candidates = vec![
+            "/var/log/".to_string(),
+            "/var/local/".to_string(),
+            "/var/tmp/".to_string(),
+        ];
+        let filtered = filter_remote_suggestion_candidates("/var", "lo", &candidates);
+        assert_eq!(
+            filtered,
+            vec!["/var/local/".to_string(), "/var/log/".to_string()]
+        );
+    }
+
+    #[test]
+    fn remote_autocomplete_skips_short_relative_prefix_lookups() {
+        assert!(should_skip_remote_autocomplete_lookup(".", "a"));
+        assert!(!should_skip_remote_autocomplete_lookup(".", "ab"));
+        assert!(!should_skip_remote_autocomplete_lookup("/var", ""));
     }
 }
