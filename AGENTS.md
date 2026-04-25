@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## github Repo interaction
+
+Use `gh` cli to check issues,check cicd, and others
+
 ## publish
 
 * publish release on github, managed by CLI `gh`
